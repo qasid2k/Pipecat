@@ -1,0 +1,15 @@
+# Secrets -- never commit real API keys
+.env
+
+# Virtual environment (rebuildable from requirements)
+.venv/
+
+# Python bytecode / caches
+__pycache__/
+*.pyc
+
+# Call transcripts / recordings -- real conversation data, not source code
+recordings/
+
+# Test run logs
+*.log
