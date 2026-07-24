@@ -24,6 +24,7 @@ Run:  python3 ari_test.py     then dial 6001 from your softphone.
 You should hear "hello world", then the call hangs up -- all driven by ARI.
 """
 import asyncio
+import base64
 import json
 import os
 
@@ -97,8 +98,11 @@ async def main():
         logger.error("ARI_PASSWORD is not set in .env -- add it and retry.")
         return
 
-    auth = aiohttp.BasicAuth(ARI_USER, ARI_PASSWORD)  # for REST calls
-    async with aiohttp.ClientSession(auth=auth) as session:
+    # Basic-auth header for REST calls, built by hand (aiohttp's BasicAuth
+    # helper is deprecated). WebSocket auth uses the api_key query param below.
+    token = base64.b64encode(f"{ARI_USER}:{ARI_PASSWORD}".encode()).decode()
+    headers = {"Authorization": f"Basic {token}"}
+    async with aiohttp.ClientSession(headers=headers) as session:
         ari = Ari(session)
 
         # WebSocket auth uses the api_key query param (user:pass). We build the
