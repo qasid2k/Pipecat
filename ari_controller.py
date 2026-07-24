@@ -17,7 +17,6 @@ a reusable class and pointed at the real pipeline instead of an echo server.
 If ARI isn't configured (no ARI_PASSWORD) or unreachable, bot.py still runs the
 direct-AudioSocket path (extension 6000) -- call control is simply disabled.
 """
-import asyncio
 import base64
 import json
 import uuid
@@ -76,6 +75,18 @@ class AriController:
             extension=extension,
             priority=priority,
         )
+
+    async def transfer(self, channel_id, context="transfer", extension="human", priority=1):
+        """Hand the caller off to a human.
+
+        We send the caller channel back to the dialplan at
+        `[context] extension,priority`, where YOU decide (in extensions.conf)
+        who "human" dials -- e.g. Dial(PJSIP/102). Leaving Stasis drops the
+        external-media leg, which ends this call's AI pipeline cleanly (our
+        StasisEnd handler tears down the bridge).
+        """
+        logger.info(f"ARI: transferring {channel_id} -> {context},{extension},{priority}")
+        return await self.continue_in_dialplan(channel_id, context, extension, priority)
 
     async def _create_bridge(self):
         return await self._req("POST", "/bridges", type="mixing")

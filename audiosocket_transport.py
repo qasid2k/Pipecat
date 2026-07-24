@@ -106,6 +106,9 @@ class AudioSocketConnection:
 
         # diagnostics / lifecycle
         self.hangup_event = asyncio.Event()
+        # Set once the AudioSocket UUID (first message) has been read, so the
+        # async side can correlate this connection with its ARI call.
+        self.uuid_ready = asyncio.Event()
         self.end_reason = "not ended"
         self.call_id = None
         self.frames_in = 0
@@ -177,6 +180,8 @@ class AudioSocketConnection:
                 logger.info(f"Call id: {self.call_id}")
             except ValueError:
                 pass
+            # Wake anyone waiting to correlate this connection with an ARI call.
+            self._loop.call_soon_threadsafe(self.uuid_ready.set)
         elif msg_type == TYPE_DTMF:
             logger.info(f"DTMF pressed: {chr(payload[0]) if payload else '?'}")
         elif msg_type == TYPE_HANGUP:

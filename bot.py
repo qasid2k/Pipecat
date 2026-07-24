@@ -27,11 +27,14 @@ import os
 import socket
 import sys
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     Frame,
@@ -56,9 +59,10 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.google.llm import GoogleLLMService
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.workers.runner import WorkerRunner
 
-from ari_controller import AriController
+from ari_controller import AriCall, AriController
 from audiosocket_transport import (
     RECV_BUFFER_BYTES,
     SAMPLE_RATE,
@@ -106,6 +110,12 @@ pushy. Treat the caller as a busy adult who wants their answer quickly.
 - Never invent facts about {COMPANY_NAME}: prices, availability, policies or
   people. If you don't have it, say you'll pass it to a human.
 
+# TRANSFERS
+- If the caller asks for a human/person/agent, sounds frustrated, or needs
+  something you genuinely cannot handle, use the `transfer_to_human` tool.
+- Say one short line first, like "Sure, let me connect you to a team member" --
+  THEN call the tool. Don't promise a transfer without calling it.
+
 # BOUNDARIES
 - Stay on topics related to {COMPANY_NAME} and the caller's request.
 - Do not give legal, medical or financial advice.
@@ -113,7 +123,59 @@ pushy. Treat the caller as a busy adult who wants their answer quickly.
 """
 
 GREETING = f"Hi, this is {AGENT_NAME} at {COMPANY_NAME}. How can I help you today?"
+
+# Where a transfer sends the caller: back to the dialplan at [transfer] human,1.
+# YOU decide who that dials in extensions.conf (e.g. Dial(PJSIP/102)).
+TRANSFER_CONTEXT = os.getenv("TRANSFER_CONTEXT", "transfer")
+TRANSFER_EXTEN = os.getenv("TRANSFER_EXTEN", "human")
 # ===========================================================================
+
+
+# The ARI controller, created in main(). Module-level so handle_call (dispatched
+# from the accept thread) can reach it to correlate a call with its channel.
+ari_controller: AriController | None = None
+
+
+@dataclass
+class CallResources:
+    """Per-call objects the LLM's tools reach via params.app_resources."""
+
+    controller: AriController | None = None
+    ari_call: AriCall | None = None
+
+
+async def transfer_to_human(params: FunctionCallParams):
+    """LLM tool: hand the caller to a human. Only works on ARI/Stasis calls."""
+    res: CallResources | None = params.app_resources
+    if res and res.controller and res.ari_call:
+
+        async def do_transfer():
+            # Let the agent's "connecting you now" line play before the audio
+            # path drops (leaving Stasis ends this call's pipeline).
+            await asyncio.sleep(3.0)
+            await res.controller.transfer(
+                res.ari_call.channel_id, context=TRANSFER_CONTEXT, extension=TRANSFER_EXTEN
+            )
+
+        asyncio.create_task(do_transfer())
+        await params.result_callback({"result": "Connecting the caller to a human now."})
+    else:
+        await params.result_callback(
+            {"result": "Transfer isn't available on this call; apologize and offer to take a message."}
+        )
+
+
+TRANSFER_TOOL = FunctionSchema(
+    name="transfer_to_human",
+    description=(
+        "Transfer the caller to a human team member. Call this when the caller "
+        "explicitly asks for a human or a person, is clearly frustrated, or needs "
+        "something you cannot do yourself."
+    ),
+    properties={},
+    required=[],
+    handler=transfer_to_human,
+)
 
 
 class TranscriptRecorder(FrameProcessor):
@@ -188,7 +250,12 @@ def build_pipeline(transport: AudioSocketTransport, recorder: TranscriptRecorder
 
     # The conversation memory. The aggregators keep it updated automatically:
     # user() records what the caller said, assistant() what the agent replied.
-    context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
+    # `tools` advertises the transfer function to the LLM; because the schema
+    # carries its handler, Pipecat auto-registers it (no register_function call).
+    context = LLMContext(
+        messages=[{"role": "system", "content": SYSTEM_PROMPT}],
+        tools=ToolsSchema(standard_tools=[TRANSFER_TOOL]),
+    )
 
     # End-of-turn detection: how do we know the caller finished talking?
     # Pipecat's DEFAULT loads a second ONNX model ("Smart Turn v3") that runs
@@ -261,11 +328,28 @@ async def handle_call(conn: socket.socket, addr):
     io = AudioSocketConnection(conn, asyncio.get_event_loop())
     io.start()  # start the read/write threads immediately -- drains from frame 0
 
+    # If this call arrived via ARI/Stasis, correlate its AudioSocket UUID with
+    # the caller's channel so the transfer tool can act on it. Direct calls
+    # (6000) have no ARI channel: ari_call stays None and transfer is a no-op.
+    ari_call = None
+    if ari_controller is not None:
+        try:
+            await asyncio.wait_for(io.uuid_ready.wait(), timeout=2.0)
+            ari_call = ari_controller.registry.get(str(io.call_id))
+            if ari_call:
+                logger.info(f"call correlated to ARI channel {ari_call.channel_id}")
+        except asyncio.TimeoutError:
+            logger.debug("no UUID within 2s; treating as a non-ARI call")
+
     transport = AudioSocketTransport(io)
     pipeline, context = build_pipeline(transport, recorder)
     # Hang up after 30s of total silence instead of the 5-minute default, so a
     # failed/silent test call ends quickly. Any speech resets this timer.
-    task = PipelineWorker(pipeline, idle_timeout_secs=30)
+    task = PipelineWorker(
+        pipeline,
+        idle_timeout_secs=30,
+        app_resources=CallResources(controller=ari_controller, ari_call=ari_call),
+    )
     runner = WorkerRunner(handle_sigint=False)
 
     # Records WHO ended the call, so a premature drop is self-diagnosing.
@@ -352,8 +436,9 @@ async def main():
     # still runs the direct-AudioSocket path (extension 6000) with no control.
     # When enabled, a call to a Stasis extension (6001) is bridged into this
     # same pipeline AND becomes transfer-capable.
+    global ari_controller
     if os.getenv("ARI_PASSWORD"):
-        controller = AriController(
+        ari_controller = AriController(
             base_url=os.getenv("ARI_BASE_URL", "http://localhost:8088"),
             app=os.getenv("ARI_APP", "voiceagent"),
             user=os.getenv("ARI_USER", "voiceagent"),
@@ -361,7 +446,7 @@ async def main():
             media_host="127.0.0.1",
             media_port=PORT,
         )
-        asyncio.create_task(controller.run())
+        asyncio.create_task(ari_controller.run())
         logger.info("Call 6000 (direct) or 6001 (via ARI/Stasis) to talk to it.")
     else:
         logger.info("Call extension 6000 to talk to it. (ARI not configured.)")
