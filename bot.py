@@ -58,6 +58,7 @@ from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.workers.runner import WorkerRunner
 
+from ari_controller import AriController
 from audiosocket_transport import (
     RECV_BUFFER_BYTES,
     SAMPLE_RATE,
@@ -346,7 +347,25 @@ async def main():
     threading.Thread(target=accept_loop, daemon=True).start()
     logger.info(f"Voice agent listening on {HOST}:{PORT}")
     logger.info(f"Transcripts will be saved to {RECORDINGS_DIR}")
-    logger.info("Call extension 6000 to talk to it.")
+
+    # Phase 3: ARI call control. Optional -- if ARI_PASSWORD isn't set, the bot
+    # still runs the direct-AudioSocket path (extension 6000) with no control.
+    # When enabled, a call to a Stasis extension (6001) is bridged into this
+    # same pipeline AND becomes transfer-capable.
+    if os.getenv("ARI_PASSWORD"):
+        controller = AriController(
+            base_url=os.getenv("ARI_BASE_URL", "http://localhost:8088"),
+            app=os.getenv("ARI_APP", "voiceagent"),
+            user=os.getenv("ARI_USER", "voiceagent"),
+            password=os.getenv("ARI_PASSWORD"),
+            media_host="127.0.0.1",
+            media_port=PORT,
+        )
+        asyncio.create_task(controller.run())
+        logger.info("Call 6000 (direct) or 6001 (via ARI/Stasis) to talk to it.")
+    else:
+        logger.info("Call extension 6000 to talk to it. (ARI not configured.)")
+
     await asyncio.Event().wait()  # run until Ctrl+C
 
 
