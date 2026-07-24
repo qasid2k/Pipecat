@@ -292,7 +292,7 @@ async def handle_call(conn: socket.socket, addr):
         duration = (datetime.now() - started).total_seconds()
         logger.warning(
             f"--- Call ended after {duration:.1f}s ({addr}); "
-            f"got {io.frames_in} caller frames ---\n"
+            f"in={io.frames_in} out={io.frames_out} (real={io.frames_out_real}) ---\n"
             f"    CAUSE: {cause['reason']}"
         )
 

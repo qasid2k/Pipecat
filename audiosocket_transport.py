@@ -110,6 +110,8 @@ class AudioSocketConnection:
         self.call_id = None
         self.frames_in = 0
         self.frames_dropped = 0
+        self.frames_out = 0
+        self.frames_out_real = 0
 
         try:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECV_BUFFER_BYTES)
@@ -198,17 +200,38 @@ class AudioSocketConnection:
         # Windows). Each tick: send one agent frame if queued, else silence,
         # then sleep to the next 20ms boundary.
         next_send = time.monotonic()
+        last_heartbeat = next_send
+        heartbeat_frames = 0
         try:
             while self._running:
                 try:
                     payload = self._outgoing.get_nowait()
+                    is_real = True
                 except queue.Empty:
                     payload = SILENCE_FRAME  # keep Asterisk's lockstep loop alive
+                    is_real = False
                 try:
                     self._sock.sendall(build_message(TYPE_AUDIO, payload))
-                except OSError:
-                    self._signal_end("write socket closed")
+                except OSError as e:
+                    self._signal_end(f"write socket error: {e!r}")
                     return
+                self.frames_out += 1
+                heartbeat_frames += 1
+                if is_real:
+                    self.frames_out_real += 1
+
+                now = time.monotonic()
+                if now - last_heartbeat >= 5.0:
+                    # Proves whether we are ACTUALLY sending continuously, in
+                    # the real Asterisk environment -- not just in a unit test.
+                    logger.info(
+                        f"audio out: {self.frames_out} frames total "
+                        f"({self.frames_out_real} real), +{heartbeat_frames} "
+                        f"in last {now - last_heartbeat:.1f}s"
+                    )
+                    last_heartbeat = now
+                    heartbeat_frames = 0
+
                 next_send += FRAME_SECS
                 gap = next_send - time.monotonic()
                 if gap > 0:
