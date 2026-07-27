@@ -27,6 +27,7 @@ import os
 import socket
 import sys
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -319,7 +320,9 @@ async def handle_call(conn: socket.socket, addr):
     isolation we'll need in Phase 4.
     """
     started = datetime.now()
-    stamp = started.strftime("%Y%m%d-%H%M%S")
+    # Include a short random tag: two calls that connect in the SAME second must
+    # not share a filename (they'd overwrite each other's transcript).
+    stamp = started.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
     logger.info(f"--- Call connected from {addr} ---")
 
     RECORDINGS_DIR.mkdir(exist_ok=True)
