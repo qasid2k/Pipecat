@@ -111,10 +111,10 @@ pushy. Treat the caller as a busy adult who wants their answer quickly.
   people. If you don't have it, say you'll pass it to a human.
 
 # TRANSFERS
-- If the caller asks for a human/person/agent, sounds frustrated, or needs
-  something you genuinely cannot handle, use the `transfer_to_human` tool.
-- Say one short line first, like "Sure, let me connect you to a team member" --
-  THEN call the tool. Don't promise a transfer without calling it.
+- When the caller asks for a human, a person, or an agent -- or is clearly
+  frustrated -- CALL the `transfer_to_human` tool. Actually call the tool; do
+  not just say you will. Calling the tool is the ONLY thing that connects them,
+  and it already tells the caller you're connecting them.
 
 # BOUNDARIES
 - Stay on topics related to {COMPANY_NAME} and the caller's request.
@@ -146,6 +146,7 @@ class CallResources:
 
 async def transfer_to_human(params: FunctionCallParams):
     """LLM tool: hand the caller to a human. Only works on ARI/Stasis calls."""
+    logger.info("TOOL: transfer_to_human called by the LLM")
     res: CallResources | None = params.app_resources
     if res and res.controller and res.ari_call:
 
