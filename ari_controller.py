@@ -9,7 +9,7 @@ Stasis app (dialplan: `Stasis(voiceagent)`), this controller:
   3. attaches an "External Media" channel that streams the audio over AudioSocket
      to bot.py's own server (127.0.0.1:8090) -- so the normal AI pipeline runs,
   4. remembers which caller channel goes with which AudioSocket UUID, so a
-     `transfer_to_human` tool can act on the right call.
+     `transfer_to_department` tool can act on the right call.
 
 This is the exact logic proven end-to-end by ari_media_test.py, refactored into
 a reusable class and pointed at the real pipeline instead of an echo server.

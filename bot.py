@@ -112,10 +112,17 @@ pushy. Treat the caller as a busy adult who wants their answer quickly.
   people. If you don't have it, say you'll pass it to a human.
 
 # TRANSFERS
-- When the caller asks for a human, a person, or an agent -- or is clearly
-  frustrated -- CALL the `transfer_to_human` tool. Actually call the tool; do
-  not just say you will. Calling the tool is the ONLY thing that connects them,
-  and it already tells the caller you're connecting them.
+- When the caller needs a human -- they ask for a person or an agent, are
+  clearly frustrated, or need something you cannot do yourself -- CALL the
+  `transfer_to_department` tool. Actually call the tool; do not just say you
+  will. Calling the tool is the ONLY thing that connects them, and it already
+  tells the caller you're connecting them.
+- Pick the department that fits their request: sales for buying, quotes or
+  pricing; support for technical problems or something broken; billing for
+  invoices, payments or refunds. If they just want a person, or nothing above
+  clearly fits, use human (a general operator).
+- If you're unsure which department, ask ONE brief question to find out before
+  transferring -- e.g. "Is this about a bill, a sale, or a technical issue?"
 
 # BOUNDARIES
 - Stay on topics related to {COMPANY_NAME} and the caller's request.
@@ -125,10 +132,18 @@ pushy. Treat the caller as a busy adult who wants their answer quickly.
 
 GREETING = f"Hi, this is {AGENT_NAME} at {COMPANY_NAME}. How can I help you today?"
 
-# Where a transfer sends the caller: back to the dialplan at [transfer] human,1.
-# YOU decide who that dials in extensions.conf (e.g. Dial(PJSIP/102)).
+# Where a transfer sends the caller: back to the dialplan at [transfer] <dept>,1.
+# The DEPARTMENT the LLM picks becomes the dialplan EXTENSION, so YOU decide who
+# each one dials in extensions.conf (e.g. [transfer] billing,1 -> Dial(PJSIP/103)).
 TRANSFER_CONTEXT = os.getenv("TRANSFER_CONTEXT", "transfer")
-TRANSFER_EXTEN = os.getenv("TRANSFER_EXTEN", "human")
+
+# The departments the agent may route to. Each MUST have a matching
+# `<name>,1,...` entry in the [transfer] dialplan context, or the transfer will
+# fail. "human" is the general operator / catch-all fallback.
+TRANSFER_DEPARTMENTS = ("sales", "support", "billing", "human")
+# If the LLM ever supplies a department outside the list, fall back to a person
+# rather than a dialplan slot that doesn't exist.
+TRANSFER_FALLBACK = "human"
 # ===========================================================================
 
 
@@ -145,9 +160,16 @@ class CallResources:
     ari_call: AriCall | None = None
 
 
-async def transfer_to_human(params: FunctionCallParams):
-    """LLM tool: hand the caller to a human. Only works on ARI/Stasis calls."""
-    logger.info("TOOL: transfer_to_human called by the LLM")
+async def transfer_to_department(params: FunctionCallParams):
+    """LLM tool: hand the caller to the right team. Only works on ARI/Stasis calls."""
+    # The LLM chooses which department; we map an unknown/blank one to a person.
+    department = (params.arguments or {}).get("department", "")
+    department = str(department).strip().lower()
+    if department not in TRANSFER_DEPARTMENTS:
+        logger.warning(f"TOOL: transfer_to_department got '{department}' -> {TRANSFER_FALLBACK}")
+        department = TRANSFER_FALLBACK
+    logger.info(f"TOOL: transfer_to_department -> {department}")
+
     res: CallResources | None = params.app_resources
     if res and res.controller and res.ari_call:
 
@@ -156,11 +178,11 @@ async def transfer_to_human(params: FunctionCallParams):
             # path drops (leaving Stasis ends this call's pipeline).
             await asyncio.sleep(3.0)
             await res.controller.transfer(
-                res.ari_call.channel_id, context=TRANSFER_CONTEXT, extension=TRANSFER_EXTEN
+                res.ari_call.channel_id, context=TRANSFER_CONTEXT, extension=department
             )
 
         asyncio.create_task(do_transfer())
-        await params.result_callback({"result": "Connecting the caller to a human now."})
+        await params.result_callback({"result": f"Connecting the caller to {department} now."})
     else:
         await params.result_callback(
             {"result": "Transfer isn't available on this call; apologize and offer to take a message."}
@@ -168,15 +190,28 @@ async def transfer_to_human(params: FunctionCallParams):
 
 
 TRANSFER_TOOL = FunctionSchema(
-    name="transfer_to_human",
+    name="transfer_to_department",
     description=(
-        "Transfer the caller to a human team member. Call this when the caller "
-        "explicitly asks for a human or a person, is clearly frustrated, or needs "
-        "something you cannot do yourself."
+        "Transfer the caller to the right human team. Call this when the caller "
+        "needs something you cannot do yourself, explicitly asks for a person, or "
+        "is clearly frustrated. Choose the department that best fits their request."
     ),
-    properties={},
-    required=[],
-    handler=transfer_to_human,
+    properties={
+        "department": {
+            "type": "string",
+            "enum": list(TRANSFER_DEPARTMENTS),
+            "description": (
+                "Which team to connect them to. "
+                "'sales' = buying, quotes, pricing, new customers. "
+                "'support' = technical problems, something broken, help using the product. "
+                "'billing' = invoices, payments, refunds, account charges. "
+                "'human' = a general operator when they just want a person or none of "
+                "the above clearly fits."
+            ),
+        }
+    },
+    required=["department"],
+    handler=transfer_to_department,
 )
 
 
