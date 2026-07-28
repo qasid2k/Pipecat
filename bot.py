@@ -323,10 +323,31 @@ def build_pipeline(transport: AudioSocketTransport, recorder: TranscriptRecorder
     return pipeline, context
 
 
+def _message_to_record(m):
+    """Normalize one context message to a plain dict for saving.
+
+    context.messages mixes plain dicts (standard user/assistant turns) with
+    LLMSpecificMessage objects (provider-specific -- these appear once a tool
+    like transfer_to_department runs). The latter have no .get(), which used to
+    crash the save. LLMSpecificMessage wraps the real payload under .message.
+    """
+    if isinstance(m, dict):
+        return m
+    inner = getattr(m, "message", m)  # unwrap LLMSpecificMessage
+    if isinstance(inner, dict):
+        return inner
+    # Provider object we can't introspect: stringify so the dump never fails.
+    return {"role": getattr(inner, "role", "tool"), "content": str(inner)}
+
+
 def save_conversation(context: LLMContext, path: Path, started: datetime):
     """Write the complete two-sided conversation once the call is over."""
     try:
-        messages = [m for m in context.messages if m.get("role") != "system"]
+        messages = [
+            r
+            for r in (_message_to_record(m) for m in context.messages)
+            if r.get("role") != "system"
+        ]
         path.write_text(
             json.dumps(
                 {
