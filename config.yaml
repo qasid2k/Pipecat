@@ -70,9 +70,9 @@ engine:
   # --- Text to speech ---
   tts:
     provider: deepgram
-    # Deepgram Aura-2 voice. Try aura-2-thalia-en or aura-2-orion-en to hear a
-    # different agent -- takes effect on the next call, no restart of anything
-    # but the bot.
+    # Deepgram Aura-2 voice. This is the DEFAULT voice: with a `pool:` block
+    # below, each persona sets its own and overrides this. It is what the
+    # fallback single agent would sound like.
     voice: aura-2-helena-en
     # ONE Deepgram key serves both STT and TTS.
     api_key_env: DEEPGRAM_API_KEY
@@ -89,7 +89,12 @@ engine:
     # reports speech boundaries. true = use it instead of the timeout above.
     smart_turn_v3: false
 
-  # --- Who the agent is ---
+  # --- Defaults every persona inherits ---
+  # WHICH ONE WINS: with a `pool:` block below, every call is served by a POOL
+  # persona, and that persona's name, voice and prompt override what is here.
+  # These values still do two jobs: `company` is inherited by every persona
+  # (they all answer for the same firm), and the whole block is the fallback
+  # single agent if `pool:` is deleted -- see the end of this file.
   persona:
     name: Alex
     company: Techbridge

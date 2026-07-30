@@ -45,10 +45,11 @@ import. The adapter imports no Pipecat; the engine imports no Asterisk.
 
 | File | Role |
 |---|---|
-| `config.yaml` | **What to run**: vendor, providers, model, voice, persona, turn-taking. Holds no secrets — it names environment variables. Safe to commit. |
-| `prompts/alex.txt` | The system prompt, with `{name}` / `{company}` placeholders. |
-| `core/config.py` | Typed, validating loader: dataclasses, unknown-key detection, `*_env` resolution, clear startup errors. |
-| `factories.py` | `create_transport(config)` / `create_engine(config)`. The only module that knows every implementation by name — which is exactly why it sits **outside** `core/`. |
+| `config.yaml` | **What to run**: vendor, providers, model, turn-taking, and the persona roster. Holds no secrets — it names environment variables. Safe to commit. |
+| `prompts/*.txt` | One system prompt per persona, with `{name}` / `{company}` placeholders. |
+| `core/config.py` | Typed, validating loader: dataclasses, unknown-key detection, `*_env` resolution, roster validation, clear startup errors. Also `config_for_persona()`. |
+| `core/pool.py` | **`AgentPool`** — who is free, who is on a call. The capacity gate, and the only shared mutable state in the service. Pure logic: no audio, no network, no engine. |
+| `factories.py` | `create_transport(config)` / `create_engine(config)` / `create_engine_for_persona(config, persona)`. The only module that knows every implementation by name — which is exactly why it sits **outside** `core/`. |
 | `core/transport.py` | The vendor-neutral contracts: `CallSession` (one call) and `BaseTransport` (one vendor connection), plus the canonical audio-format constants. |
 | `core/engine.py` | The engine-neutral contract: `Engine.run(session)` drives one call's conversation. Mentions no pipelines, frames or processors — that vocabulary is Pipecat's and stops here. |
 | `transports/asterisk.py` | **The Asterisk adapter.** `AsteriskTransport` owns the listening socket + accept thread, the ARI Stasis app, and the UUID correlation. `AsteriskCallSession` is one call, with `transfer()` done the ARI way. Also covers FreePBX. |
@@ -57,7 +58,9 @@ import. The adapter imports no Pipecat; the engine imports no Asterisk.
 | `engine/pipecat_engine.py` | **The conversation.** `PipecatEngine`: persona prompt, the STT→LLM→TTS pipeline, the `transfer_to_department` tool, the per-call lifecycle. |
 | `engine/session_transport.py` | Bridges our `CallSession` to Pipecat's transport classes. Pipecat-specific but vendor-neutral: it will drive a pipeline from *any* `CallSession`. |
 | `engine/transcripts.py` | `TranscriptRecorder` + `save_conversation`. |
-| `bot.py` | Entry point and wiring: get a transport, get an engine, introduce them, guarantee cleanup. ~90 lines. |
+| `bot.py` | Entry point and wiring: get a transport, get the pool, give each call a free agent, guarantee cleanup. `run_call` is the **only** path a call can take. |
+| `tests/test_pool.py` | `AgentPool` unit tests (16). Stdlib `unittest` — see [[decisions]] 030. |
+| `tests/test_call_loop.py` | `run_call` wiring tests (10): distinct personas, per-call engines, rejection at capacity, and release on every failure path. |
 | `audiosocket_server.py` | Earlier standalone echo/test server. Superseded by `bot.py`. |
 | `ari_test.py`, `ari_media_test.py`, `nettest_*.py` | Throwaway probes used to prove ARI and the network path. Not part of the running system. |
 
@@ -66,26 +69,71 @@ call pipelines; each call additionally owns two OS threads for socket I/O.
 
 ### The main loop
 ```python
-config = load_config()                            # validated BEFORE anything listens
+config = load_config()                       # validated BEFORE anything listens
+pool = AgentPool(config.pool.personas)       # capacity N = len(personas)
 transport = create_transport(config)
 await transport.start()
 async for session in transport.listen():
-    asyncio.create_task(run_call(config, session))  # a TASK, so calls run in parallel
+    asyncio.create_task(run_call(config, pool, transport, session))
 
-async def run_call(config, session):
-    engine = create_engine(config)                # one engine per call
+async def run_call(config, pool, transport, session):
+    persona = await pool.acquire()
+    if persona is None:                      # app-side capacity gate
+        await transport.reject(session)
+        return
     try:
+        engine = create_engine_for_persona(config, persona)   # OWN instance
         await engine.run(session)
     finally:
-        await session.hangup()               # guaranteed on EVERY path
+        await pool.release(persona)          # guaranteed on EVERY path
+        await session.hangup()
 ```
-Two things are deliberate here:
+Five things are deliberate here:
 * `create_task`, not `await` — awaiting `run_call` would serialise calls and
   destroy concurrency. Task references are held in `_active_calls` so CPython
   cannot garbage-collect a running call.
+* **The pool is acquired inside the task, not in the `async for`.** Rejecting a
+  call can mean talking to the vendor; doing that in the accept loop would stall
+  the next caller behind it.
 * **`run_call` owns the session's lifecycle, not the engine.** The engine never
   calls `hangup()`; the `finally` releases the session exactly once whether the
   conversation ended normally, the caller hung up, or the engine raised.
+* **The engine is constructed inside the `try`.** If construction fails the agent
+  has already left the pool, so a `try` that began after it would leak that agent
+  permanently. Tested: `test_persona_released_when_engine_CONSTRUCTION_fails`.
+* **Release before hangup.** `hangup()` talks to the vendor and can fail; an
+  agent released after it would then never be released at all.
+
+### Isolation between calls
+Every call builds its **own** engine, and with it its own VAD, its own Deepgram
+and Gemini connections, its own audio buffers and its own conversation context.
+Nothing is shared or reused. Two separate properties depend on this:
+
+* **Concurrent calls** cannot contaminate each other. A shared VAD would have
+  callers cutting each other off; a shared LLM context would have them reading
+  each other's conversation.
+* **A reused persona starts blank.** `PoolPersona` is a frozen description —
+  name, voice, instructions — carrying no history, so there is nothing to carry
+  over to the next caller. This is a *privacy* guarantee. Caching an engine per
+  persona to save startup time would quietly break it without failing a test.
+
+The pool provides mutual exclusion only. Isolation comes from the per-call
+engine; the two are easy to confuse and only one of them is enforced by
+`core/pool.py`.
+
+### Capacity and the two gates
+`N = len(config.pool.personas)`. A call arriving when all N agents are busy is
+refused, not answered badly. Two layers:
+
+| Layer | Where | What the caller hears | Applies to |
+|---|---|---|---|
+| Dialplan `GROUP_COUNT` cap | Asterisk, before the app | a spoken "all agents busy" message | Asterisk only |
+| `pool.acquire() is None` → `transport.reject()` | `run_call` | an immediate clean hangup | **every** transport |
+
+The app-side gate is primary and transport-agnostic — it is the *only* gate for a
+vendor with no dialplan. The dialplan cap exists for the nicer message. A
+`POOL FULL` line in the logs on an Asterisk call therefore means the dialplan cap
+and the roster have drifted apart; see [[runbook]].
 
 ---
 

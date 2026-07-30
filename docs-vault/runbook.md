@@ -144,12 +144,20 @@ exactly which config took effect:
 
 ```
 Config: /path/to/config.yaml
-Agent 'Alex' for Techbridge | transport=asterisk | engine=pipecat | deepgram STT -> gemini-flash-lite-latest -> aura-2-helena-en
+transport=asterisk | engine=pipecat | deepgram STT -> gemini-flash-lite-latest -> deepgram TTS
+Pool: capacity 3 (max simultaneous calls)
+  - Alex (aura-2-helena-en)
+  - Sarah (aura-2-thalia-en)
+  - Daniel (aura-2-orion-en)
 AudioSocket server listening on 0.0.0.0:8090
 Call 6000 (direct) or 6001 (via ARI/Stasis) to talk to it.
 Transcripts will be saved to .../recordings
 ARI call control ENABLED (app 'voiceagent')
 ```
+
+**`Pool: capacity N` is the number that must match the Asterisk dialplan's
+`GROUP` cap** (Phase 4). The dialplan cannot read `config.yaml`, so these two are
+kept equal by hand — see [[personas]].
 
 If it exits immediately with `Configuration problem:`, read the message — it
 names the exact setting or environment variable at fault.
@@ -205,10 +213,48 @@ Run these after **every** phase — this is the regression suite:
 4. **"No one available".** Transfer to a department whose endpoint is offline.
    The caller must hear the message, not silence.
 5. **Two simultaneous calls.** Both converse independently; two sets of
-   transcript files appear; neither call's audio leaks into the other.
+   transcript files appear; neither call's audio leaks into the other. Each
+   caller must hear a **different agent — different name AND different voice**.
 6. **Clean end.** The final log line reports duration, `in`/`out`/`out_real`
    frame counts, and a `CAUSE:` — which should be the caller hanging up, not an
    exception.
+7. **Capacity.** Fill all N slots, then dial once more. The extra caller is
+   refused, not answered. Log: `POOL FULL -- rejecting call from ...`.
+   *Until the Phase 4 dialplan gate exists this is a silent hangup; afterwards
+   the caller hears a spoken "all agents busy" message instead.*
+8. **Release and reuse.** Hang up, then dial again. The freed agent is handed
+   out first (see [[decisions]] 029), so you should get the **same** agent — who
+   must remember **nothing** of the previous call. Ask "what did I just tell
+   you?"; any recollection is a privacy failure, not a quirk.
+9. **No leak.** After every call has ended, the last `released` line must read
+   `N/N free (on calls: none)`. A count that never returns to N means an agent
+   leaked and capacity has permanently dropped.
+
+### The pool's own log lines
+
+Every line is keyed by the call UUID, so a single call can be followed end to end:
+
+```
+[<uuid>] assigned 'Alex' (aura-2-helena-en) to <caller> | 2/3 free (on calls: Alex)
+[<uuid>] released 'Alex' (caller hung up) | 3/3 free (on calls: none)
+[<uuid>] POOL FULL -- rejecting call from <caller> | 0/3 free (on calls: Alex, Sarah, Daniel)
+```
+
+`POOL FULL` on an **Asterisk** call means the dialplan cap and the roster have
+drifted apart — the dialplan should have caught that caller first and played the
+busy message. Check `Pool: capacity N` at startup against the dialplan's cap.
+
+### Automated tests (no phone needed)
+
+```bash
+python -m unittest discover -s tests -t . -v      # 26 tests
+```
+
+Covers the pool logic and the call-loop wiring: distinct personas for concurrent
+calls, one engine per call, rejection at capacity, and the agent returning to the
+pool on a normal end, an engine exception, an engine *construction* failure and a
+cancelled call. These do **not** touch audio, Asterisk or the providers — they are
+a fast pre-flight, not a substitute for steps 1–9.
 
 Artifacts land in `recordings/`:
 `<stamp>-transcript.jsonl` (live, per caller utterance) and
