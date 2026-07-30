@@ -5,6 +5,36 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-07-30 — Phase 2: transport interface + Asterisk adapter
+**Structural only — no behaviour change intended.** See [[decisions]] 013–016.
+
+* New `core/transport.py`: the `CallSession` and `BaseTransport` contracts, plus
+  the canonical audio-format constants (now defined once, imported by the
+  adapter instead of being re-hardcoded).
+* New `transports/asterisk.py`: `AsteriskTransport` (listening socket + accept
+  thread, ARI controller, UUID correlation, per-call intake tasks) and
+  `AsteriskCallSession` (async audio, ARI transfer, audio-only hangup). Also
+  covers FreePBX.
+* `bot.py` shrank to the conversation: it lost the listening socket,
+  `make_listen_socket`, the accept thread, the ARI controller global and the
+  correlation code. `handle_call(session)` replaces `handle_call(conn, addr)`.
+  The main loop is now `async for session in transport.listen()`.
+* `transfer_to_department` calls `session.transfer(dept)` instead of reaching
+  into ARI. The 3 s announcement delay stays in the tool handler.
+* The Pipecat glue transports now read/write through a `CallSession`, so they
+  are no longer Asterisk-specific.
+* `AriCall` gained `caller_id`, surfaced as `CallSession.caller_id`.
+* Threading, pacing, queue bounds and socket options are **untouched**.
+* Verified without a phone, over a real TCP socket, playing the part of
+  Asterisk: **26/26 checks** — 20.0 ms average pacing, 50 silence frames/s when
+  idle, 320-byte frames, correct UUID correlation, `[transfer] billing,1` on the
+  caller channel, no ARI hangup after a transfer, two concurrent calls with no
+  audio leakage, and the `None` sentinel on caller hangup. The Pipecat pipeline
+  builds on a session with the same stages and the tool handler still wired.
+* **Not yet verified: a real phone call.** That is the Phase 2 checkpoint.
+
+---
+
 ## 2026-07-30 — Phase 1: docs vault + version alignment
 Branch `feature/modular-configurable`, based on `519cd29`.
 

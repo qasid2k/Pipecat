@@ -1,26 +1,59 @@
 # Architecture (as it exists today)
 
-Status: **as-built, 2026-07-30.** This note describes the system *before* the
-modular/configurable refactor. Every detail here was read off the code, not
-remembered. Related: [[decisions]], [[bugs]], [[runbook]], [[changelog]].
+Status: **as-built, 2026-07-30, after Phase 2** (transport interface + Asterisk
+adapter). Every detail here was read off the code, not remembered.
+Related: [[decisions]], [[bugs]], [[runbook]], [[changelog]].
 
 One Asterisk AI voice agent. **Single agent, single persona, single voice.**
 No agent pool, no queueing, no call recording of audio (transcripts only).
 
 ---
 
+## Layering (introduced in Phase 2)
+
+```
+        bot.py                 the conversation: persona, pipeline, tools
+           |                   talks ONLY to CallSession
+           v
+   core/transport.py           CallSession + BaseTransport contracts
+           ^                   knows nothing about any vendor
+           |
+  transports/asterisk.py       the Asterisk/FreePBX adapter
+           |
+   +-------+--------+
+   |                |
+ari_controller.py   audiosocket_transport.py
+(ARI: control)      (AudioSocket: protocol + I/O threads)
+```
+
+The rule: **the arrows never skip the middle.** `bot.py` contains no socket, no
+ARI call and no vendor concept; the adapter contains no Pipecat import.
+
 ## Components
 
 | File | Role |
 |---|---|
-| `bot.py` | Entry point. Owns the AudioSocket listening socket, the accept thread, the per-call pipeline, the persona prompt, and the `transfer_to_department` tool. |
-| `audiosocket_transport.py` | The AudioSocket protocol + threaded socket I/O, wrapped as a Pipecat transport (`AudioSocketTransport`). |
+| `core/transport.py` | The vendor-neutral contracts: `CallSession` (one call) and `BaseTransport` (one vendor connection), plus the canonical audio-format constants. |
+| `transports/asterisk.py` | **The Asterisk adapter.** `AsteriskTransport` owns the listening socket + accept thread, the ARI Stasis app, and the UUID correlation. `AsteriskCallSession` is one call, with `transfer()` done the ARI way. Also covers FreePBX. |
+| `bot.py` | Entry point + the conversation: persona prompt, the Pipecat pipeline, the `transfer_to_department` tool, transcripts. Vendor-agnostic. |
+| `audiosocket_transport.py` | Two halves: `AudioSocketConnection` (protocol + the two I/O threads, Asterisk-specific) and the Pipecat glue transports, which now read/write through a `CallSession` and so are vendor-neutral. Phase 3 splits them. |
 | `ari_controller.py` | ARI/Stasis call control: answer, mixing bridge, External Media channel, UUID registry, transfer. |
 | `audiosocket_server.py` | Earlier standalone echo/test server. Superseded by `bot.py`. |
 | `ari_test.py`, `ari_media_test.py`, `nettest_*.py` | Throwaway probes used to prove ARI and the network path. Not part of the running system. |
 
 Runs as **one process**: the asyncio event loop hosts the ARI controller and all
 call pipelines; each call additionally owns two OS threads for socket I/O.
+
+### The main loop
+```python
+transport = transport_from_env()          # Phase 4: from config.yaml
+await transport.start()
+async for session in transport.listen():
+    asyncio.create_task(handle_call(session))   # a TASK, so calls run in parallel
+```
+`create_task`, not `await`: awaiting `handle_call` here would serialise calls and
+destroy concurrency. Task references are held in `_active_calls` so CPython
+cannot garbage-collect a running call.
 
 ---
 
@@ -94,6 +127,23 @@ Protocol framing — `[1 byte TYPE][2 bytes LENGTH, big-endian][PAYLOAD]`:
 **Canonical audio format, end to end: 8 kHz / 16-bit signed / mono (slin).**
 One 20 ms frame = **320 bytes**. Deepgram STT/TTS and Silero VAD all accept
 8 kHz, so **there is no resampling anywhere** in the system.
+
+### The CallSession contract, and how the adapter satisfies it
+
+| Contract method | Asterisk implementation |
+|---|---|
+| `read_audio()` | `await io.incoming.get()` — the asyncio queue the read thread feeds. Returns `None` **once** when the call ends. |
+| `write_audio(pcm)` | `run_in_executor(io.queue_output, pcm)` — the blocking bounded put that paces playback. |
+| `transfer(dept)` | `POST /channels/{caller}/continue` into `[transfer] <dept>,1`. |
+| `hangup()` | Closes the audio path **only** — see the warning below. |
+| `can_transfer` | `True` only when this call has an ARI channel (Stasis, ext 6001). |
+| `ended` / `end_reason` | The connection's existing `hangup_event` and reason string, reused rather than duplicated. |
+
+> ⚠️ **`hangup()` must never issue an ARI hangup on the caller's channel.** It
+> runs in the engine's `finally`, which also executes after a *successful*
+> transfer — at which point the channel belongs to the dialplan and may be
+> talking to a human. Hanging it up there would kill the call we just
+> transferred. Bridge/media cleanup is `StasisEnd`'s job either way.
 
 ### Threading model (the trickiest part of the codebase)
 
@@ -211,8 +261,11 @@ Transfer is a **call-control** operation, not a pipeline operation.
 2. The handler returns to the LLM immediately ("Connecting the caller to X now")
    and schedules the real work as a task with **`await asyncio.sleep(3.0)`** —
    the agent's spoken "connecting you now" needs to finish playing, because
-   leaving Stasis kills the audio path.
-3. `AriController.transfer` issues
+   leaving Stasis kills the audio path. The delay stays in the tool handler
+   (it is about the announcement), not in the transport (which is about
+   mechanism).
+3. The handler calls **`call_session.transfer(department)`** — it does not touch
+   ARI. `AsteriskCallSession.transfer` then issues
    **`POST /ari/channels/{caller_channel_id}/continue`** with
    `context=transfer` (env `TRANSFER_CONTEXT`), `extension=<department>`,
    `priority=1`.

@@ -34,6 +34,10 @@ class AriCall:
     bridge_id: str
     em_id: str  # the external-media channel id
     audiosocket_uuid: str
+    # Caller's number as Asterisk reported it, or "unknown". Surfaced as
+    # CallSession.caller_id. Treat as untrusted -- on most trunks it is
+    # caller-supplied.
+    caller_id: str = "unknown"
 
 
 class AriController:
@@ -123,7 +127,7 @@ class AriController:
         bid = bridge["id"]
         await self._add(bid, cid)
 
-        self.registry[au] = AriCall(cid, bid, em_id, au)
+        self.registry[au] = AriCall(cid, bid, em_id, au, caller)
 
         em = await self._external_media(
             app=self._app,

@@ -63,10 +63,10 @@ python bot.py
 Expect on startup:
 
 ```
-Voice agent listening on 0.0.0.0:8090
+AudioSocket server listening on 0.0.0.0:8090
+Call 6000 (direct) or 6001 (via ARI/Stasis) to talk to it.
 Transcripts will be saved to .../recordings
 ARI call control ENABLED (app 'voiceagent')
-Call 6000 (direct) or 6001 (via ARI/Stasis) to talk to it.
 ```
 
 If the last two lines say ARI is not configured, `ARI_PASSWORD` is unset.
@@ -169,16 +169,24 @@ Pipecat already abstracts providers, so we add **no** wrapper classes of our own
    needing a new entry, not a quick fix.
 
 ### Add a telephony transport (e.g. Twilio)
-1. Implement `BaseTransport` + `CallSession` (Phase 2 interfaces): `listen()`,
-   `reject()`, `start()`/`stop()`, and per call `read_audio()`, `write_audio()`,
-   `transfer()`, `hangup()`.
-2. **Convert audio to/from canonical 8 kHz slin inside the adapter.** The core
-   must never see mu-law, base64, or vendor frames.
-3. Implement `transfer()` the vendor's way (Twilio: REST redirect / TwiML). There
+Copy `transports/asterisk.py` as the worked example; the contracts it implements
+are documented in `core/transport.py`.
+1. Add `transports/<vendor>.py` implementing `BaseTransport` (`start`, `stop`,
+   `listen`, `reject`) and `CallSession` (`read_audio`, `write_audio`,
+   `transfer`, `hangup`, `can_transfer`, `ended`/`end_reason`). Python will
+   refuse to instantiate the class until every abstract method exists.
+2. Do per-call setup in a **task**, not inline in `listen()`, or call N+1 waits
+   behind call N ([[decisions]] 015).
+3. Make `hangup()` release only your audio path — never destroy a call that may
+   already have been transferred away ([[decisions]] 014).
+4. **Convert audio to/from canonical 8 kHz slin inside the adapter** (the
+   constants are in `core/transport.py`). The core must never see mu-law,
+   base64, or vendor frames.
+5. Implement `transfer()` the vendor's way (Twilio: REST redirect / TwiML). There
    is no dialplan, so the "no one available" fallback becomes app-side.
-4. Register it in `create_transport()` and select it with
+6. Register it in `create_transport()` and select it with
    `transport.provider:` in `config.yaml` — **no core code change**.
-5. Leave the Asterisk path untouched, and re-run §5 against Asterisk to prove it.
+7. Leave the Asterisk path untouched, and re-run §5 against Asterisk to prove it.
 
 ### Change the persona
 Today: edit the `SYSTEM_PROMPT` block at `bot.py:87`. From Phase 4:

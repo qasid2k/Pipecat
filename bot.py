@@ -19,14 +19,22 @@ The pipeline, stage by stage:
 
 Swapping a provider = changing ONE line in build_pipeline().
 Verified against pipecat-ai 1.6.0 (pinned in requirements.txt).
+
+STRUCTURE (after the Phase 2 modular refactor)
+    core/transport.py        vendor-neutral CallSession / BaseTransport contracts
+    transports/asterisk.py   the Asterisk adapter: ARI + AudioSocket + transfer
+    audiosocket_transport.py the AudioSocket protocol/threads + Pipecat glue
+    bot.py (this file)       the conversation: persona, pipeline, tools
+
+This file no longer knows what ARI or a socket is. It receives CallSessions and
+runs a conversation on them. Phase 3 moves the pipeline into a PipecatEngine;
+Phase 4 moves the hardcoded models/voice/prompt below into config.yaml.
 """
 
 import asyncio
 import json
 import os
-import socket
 import sys
-import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -63,18 +71,11 @@ from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.workers.runner import WorkerRunner
 
-from ari_controller import AriCall, AriController
-from audiosocket_transport import (
-    RECV_BUFFER_BYTES,
-    SAMPLE_RATE,
-    AudioSocketConnection,
-    AudioSocketTransport,
-)
+from audiosocket_transport import SAMPLE_RATE, AudioSocketTransport
+from core.transport import CallSession
+from transports.asterisk import transport_from_env
 
 load_dotenv()
-
-HOST = os.getenv("AUDIOSOCKET_HOST", "0.0.0.0")
-PORT = int(os.getenv("AUDIOSOCKET_PORT", "8090"))
 
 RECORDINGS_DIR = Path(__file__).parent / "recordings"
 
@@ -132,11 +133,14 @@ pushy. Treat the caller as a busy adult who wants their answer quickly.
 
 GREETING = f"Hi, this is {AGENT_NAME} at {COMPANY_NAME}. How can I help you today?"
 
-# Where a transfer sends the caller: back to the dialplan at [transfer] <dept>,1.
-# The DEPARTMENT the LLM picks becomes the dialplan EXTENSION, so YOU decide who
-# each one dials in extensions.conf (e.g. [transfer] billing,1 -> Dial(PJSIP/103)).
-TRANSFER_CONTEXT = os.getenv("TRANSFER_CONTEXT", "transfer")
-
+# NOTE: HOW a transfer happens is no longer this file's business -- it moved to
+# the transport (transports/asterisk.py), because every vendor does it
+# differently. We only decide WHICH department to ask for.
+#
+# On Asterisk the department name becomes the dialplan EXTENSION under
+# [transfer], so YOU decide who each one dials in extensions.conf
+# (e.g. [transfer] billing,1 -> Dial(PJSIP/103)).
+#
 # The departments the agent may route to. Each MUST have a matching
 # `<name>,1,...` entry in the [transfer] dialplan context, or the transfer will
 # fail. "human" is the general operator / catch-all fallback.
@@ -147,21 +151,23 @@ TRANSFER_FALLBACK = "human"
 # ===========================================================================
 
 
-# The ARI controller, created in main(). Module-level so handle_call (dispatched
-# from the accept thread) can reach it to correlate a call with its channel.
-ari_controller: AriController | None = None
-
-
 @dataclass
 class CallResources:
-    """Per-call objects the LLM's tools reach via params.app_resources."""
+    """Per-call objects the LLM's tools reach via params.app_resources.
 
-    controller: AriController | None = None
-    ari_call: AriCall | None = None
+    Just the CallSession now -- the tool asks the session to transfer and does
+    not know or care that Asterisk and ARI are involved.
+    """
+
+    session: CallSession | None = None
 
 
 async def transfer_to_department(params: FunctionCallParams):
-    """LLM tool: hand the caller to the right team. Only works on ARI/Stasis calls."""
+    """LLM tool: hand the caller to the right team.
+
+    Works on any transport whose session reports can_transfer -- on Asterisk
+    that means a Stasis call (6001), not a direct AudioSocket call (6000).
+    """
     # The LLM chooses which department; we map an unknown/blank one to a person.
     department = (params.arguments or {}).get("department", "")
     department = str(department).strip().lower()
@@ -171,15 +177,17 @@ async def transfer_to_department(params: FunctionCallParams):
     logger.info(f"TOOL: transfer_to_department -> {department}")
 
     res: CallResources | None = params.app_resources
-    if res and res.controller and res.ari_call:
+    session = res.session if res else None
+    # Check up front so we tell the caller the truth BEFORE promising anything.
+    if session is not None and session.can_transfer:
 
         async def do_transfer():
             # Let the agent's "connecting you now" line play before the audio
-            # path drops (leaving Stasis ends this call's pipeline).
+            # path drops (on Asterisk, leaving Stasis ends this call's pipeline).
+            # The delay stays HERE rather than in the transport because it is
+            # about the spoken announcement, not about how a transfer works.
             await asyncio.sleep(3.0)
-            await res.controller.transfer(
-                res.ari_call.channel_id, context=TRANSFER_CONTEXT, extension=department
-            )
+            await session.transfer(department)
 
         asyncio.create_task(do_transfer())
         await params.result_callback({"result": f"Connecting the caller to {department} now."})
@@ -367,48 +375,29 @@ def save_conversation(context: LLMContext, path: Path, started: datetime):
         logger.error(f"Could not save conversation: {e}")
 
 
-async def handle_call(conn: socket.socket, addr):
-    """One phone call = one connection = one independent pipeline.
+async def handle_call(session: CallSession):
+    """Run one conversation on one call. Vendor-agnostic: it only uses CallSession.
 
-    Socket I/O runs on dedicated threads inside AudioSocketConnection (see that
-    module for why). Each call builds its own pipeline and its own try/except,
-    so a crash in one call can't take down the others -- the per-call error
-    isolation we'll need in Phase 4.
+    Each call builds its own pipeline and its own try/except, so a crash in one
+    call can't take down the others. The socket threads live inside the
+    transport; nothing here touches a socket.
     """
     started = datetime.now()
     # Include a short random tag: two calls that connect in the SAME second must
     # not share a filename (they'd overwrite each other's transcript).
     stamp = started.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
-    logger.info(f"--- Call connected from {addr} ---")
 
     RECORDINGS_DIR.mkdir(exist_ok=True)
     recorder = TranscriptRecorder(RECORDINGS_DIR / f"{stamp}-transcript.jsonl")
 
-    conn.setblocking(True)
-    io = AudioSocketConnection(conn, asyncio.get_event_loop())
-    io.start()  # start the read/write threads immediately -- drains from frame 0
-
-    # If this call arrived via ARI/Stasis, correlate its AudioSocket UUID with
-    # the caller's channel so the transfer tool can act on it. Direct calls
-    # (6000) have no ARI channel: ari_call stays None and transfer is a no-op.
-    ari_call = None
-    if ari_controller is not None:
-        try:
-            await asyncio.wait_for(io.uuid_ready.wait(), timeout=2.0)
-            ari_call = ari_controller.registry.get(str(io.call_id))
-            if ari_call:
-                logger.info(f"call correlated to ARI channel {ari_call.channel_id}")
-        except asyncio.TimeoutError:
-            logger.debug("no UUID within 2s; treating as a non-ARI call")
-
-    transport = AudioSocketTransport(io)
+    transport = AudioSocketTransport(session)
     pipeline, context = build_pipeline(transport, recorder)
     # Hang up after 30s of total silence instead of the 5-minute default, so a
     # failed/silent test call ends quickly. Any speech resets this timer.
     task = PipelineWorker(
         pipeline,
         idle_timeout_secs=30,
-        app_resources=CallResources(controller=ari_controller, ari_call=ari_call),
+        app_resources=CallResources(session=session),
     )
     runner = WorkerRunner(handle_sigint=False)
 
@@ -417,9 +406,9 @@ async def handle_call(conn: socket.socket, addr):
 
     async def watch_for_hangup():
         """When the call ends (socket closed / hangup), tear the pipeline down."""
-        await io.hangup_event.wait()
-        cause["reason"] = f"AudioSocket ended -- {io.end_reason}"
-        await task.cancel(reason="audiosocket ended")
+        await session.ended.wait()
+        cause["reason"] = f"call ended -- {session.end_reason}"
+        await task.cancel(reason="call ended")
 
     watcher = asyncio.create_task(watch_for_hangup())
     try:
@@ -432,12 +421,15 @@ async def handle_call(conn: socket.socket, addr):
         logger.exception(f"Call failed: {e}")
     finally:
         watcher.cancel()
-        io.stop()
+        # Releases the audio path only. It does NOT tear down a call we may have
+        # just transferred -- see AsteriskCallSession.hangup().
+        await session.hangup()
         save_conversation(context, RECORDINGS_DIR / f"{stamp}-conversation.json", started)
         duration = (datetime.now() - started).total_seconds()
+        # Frame counters are vendor-specific, so they are optional extra detail.
+        stats = session.stats() if hasattr(session, "stats") else ""
         logger.warning(
-            f"--- Call ended after {duration:.1f}s ({addr}); "
-            f"in={io.frames_in} out={io.frames_out} (real={io.frames_out_real}) ---\n"
+            f"--- Call ended after {duration:.1f}s ({session.call_id}); {stats} ---\n"
             f"    CAUSE: {cause['reason']}"
         )
 
@@ -451,67 +443,35 @@ def check_keys():
         sys.exit(1)
 
 
-def make_listen_socket() -> socket.socket:
-    """Create the listening socket with a large receive buffer set BEFORE bind.
-
-    This is the real fix for Asterisk dropping calls with "Resource temporarily
-    unavailable". TCP negotiates its window-scaling factor during the handshake,
-    based on the LISTENING socket's buffer size. If we only enlarge the buffer
-    after accepting (per connection), the window scale is already fixed small
-    and the effective receive window stays ~64KB no matter how big the buffer
-    memory is. Setting SO_RCVBUF here, before bind/listen, lets every accepted
-    connection negotiate a large window from its very first packet.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # NOTE: do NOT set SO_REUSEADDR on Windows -- it raises WinError 10013 on
-    # bind. asyncio itself skips it on Windows for the same reason.
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECV_BUFFER_BYTES)
-    sock.bind((HOST, PORT))
-    return sock
+# Keeps a reference to every in-flight call task. Without this, CPython is free
+# to garbage-collect a running task that nothing else holds.
+_active_calls: set[asyncio.Task] = set()
 
 
 async def main():
+    """Accept calls from the transport and run a conversation on each.
+
+    Note how little is left here: build a transport, then loop over the calls it
+    hands us. Swapping Asterisk for another vendor changes the one line that
+    builds the transport (Phase 4 turns that into a config lookup) and nothing
+    else in this file.
+    """
     check_keys()
     RECORDINGS_DIR.mkdir(exist_ok=True)
-    loop = asyncio.get_event_loop()
 
-    lsock = make_listen_socket()
-    lsock.listen(8)
-    lsock.setblocking(True)
-
-    def accept_loop():
-        """Blocking accept() in its own thread; each call runs as a coroutine."""
-        while True:
-            try:
-                conn, addr = lsock.accept()
-            except OSError:
-                break
-            asyncio.run_coroutine_threadsafe(handle_call(conn, addr), loop)
-
-    threading.Thread(target=accept_loop, daemon=True).start()
-    logger.info(f"Voice agent listening on {HOST}:{PORT}")
+    transport = transport_from_env()
+    await transport.start()
     logger.info(f"Transcripts will be saved to {RECORDINGS_DIR}")
 
-    # Phase 3: ARI call control. Optional -- if ARI_PASSWORD isn't set, the bot
-    # still runs the direct-AudioSocket path (extension 6000) with no control.
-    # When enabled, a call to a Stasis extension (6001) is bridged into this
-    # same pipeline AND becomes transfer-capable.
-    global ari_controller
-    if os.getenv("ARI_PASSWORD"):
-        ari_controller = AriController(
-            base_url=os.getenv("ARI_BASE_URL", "http://localhost:8088"),
-            app=os.getenv("ARI_APP", "voiceagent"),
-            user=os.getenv("ARI_USER", "voiceagent"),
-            password=os.getenv("ARI_PASSWORD"),
-            media_host="127.0.0.1",
-            media_port=PORT,
-        )
-        asyncio.create_task(ari_controller.run())
-        logger.info("Call 6000 (direct) or 6001 (via ARI/Stasis) to talk to it.")
-    else:
-        logger.info("Call extension 6000 to talk to it. (ARI not configured.)")
-
-    await asyncio.Event().wait()  # run until Ctrl+C
+    try:
+        async for session in transport.listen():
+            # One TASK per call, deliberately: awaiting handle_call here would
+            # run calls one at a time and break concurrency.
+            task = asyncio.create_task(handle_call(session))
+            _active_calls.add(task)
+            task.add_done_callback(_active_calls.discard)
+    finally:
+        await transport.stop()
 
 
 if __name__ == "__main__":

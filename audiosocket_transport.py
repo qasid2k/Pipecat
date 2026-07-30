@@ -1,8 +1,21 @@
 """
-Phase 2: the AudioSocket bridge, wrapped as a Pipecat transport.
+The AudioSocket bridge: the protocol + threaded socket I/O, plus the Pipecat
+transport that feeds a pipeline from a CallSession.
 
 Pipecat ships transports for WebRTC/WebSockets -- none speak AudioSocket, so we
 write ours. The AudioSocket protocol parsing is the same you wrote in Phase 1.
+
+TWO HALVES, ONE FILE (for now):
+  * AudioSocketConnection      -- Asterisk-specific: the socket, the protocol,
+                                  the two I/O threads. Used by
+                                  transports/asterisk.py.
+  * AudioSocket*Transport      -- Pipecat glue. As of the modular refactor these
+                                  read and write through a **CallSession**, not
+                                  the raw connection, so they are no longer
+                                  Asterisk-specific at all: any transport that
+                                  implements CallSession can drive a Pipecat
+                                  pipeline through them. Phase 3 moves this half
+                                  next to the engine, where it belongs.
 
 WHY THREADS (the hard lesson): Asterisk's AudioSocket does non-blocking writes
 with ZERO tolerance -- if it can't hand us a frame the instant it's ready, it
@@ -39,6 +52,14 @@ from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 
+from core.transport import (
+    CANONICAL_CHANNELS,
+    CANONICAL_FRAME_BYTES,
+    CANONICAL_FRAME_MS,
+    CANONICAL_SAMPLE_RATE,
+    CallSession,
+)
+
 # ---------------------------------------------------------------------------
 # AudioSocket protocol: [ 1 byte TYPE ][ 2 bytes LENGTH (big-endian) ][ PAYLOAD ]
 # ---------------------------------------------------------------------------
@@ -50,10 +71,12 @@ TYPE_ERROR = 0xFF
 
 # 8 kHz, 16-bit signed, mono. One 20ms frame = 320 bytes. Deepgram + Silero VAD
 # both handle 8 kHz, so we run the whole pipeline at 8 kHz (no resampling).
-SAMPLE_RATE = 8000
-NUM_CHANNELS = 1
-FRAME_BYTES = 320
-FRAME_SECS = 0.02
+# These come from core.transport so the canonical format is defined ONCE and an
+# adapter cannot quietly disagree with the core about it.
+SAMPLE_RATE = CANONICAL_SAMPLE_RATE
+NUM_CHANNELS = CANONICAL_CHANNELS
+FRAME_BYTES = CANONICAL_FRAME_BYTES
+FRAME_SECS = CANONICAL_FRAME_MS / 1000
 SILENCE_FRAME = bytes(FRAME_BYTES)
 
 # Cap the caller-audio backlog handed to the pipeline (drop oldest past this).
@@ -262,11 +285,15 @@ class AudioSocketConnection:
 
 
 class AudioSocketInputTransport(BaseInputTransport):
-    """Feeds queued caller audio into the pipeline."""
+    """Feeds caller audio from a CallSession into the pipeline.
 
-    def __init__(self, conn: AudioSocketConnection, params: TransportParams, **kwargs):
+    Note it takes a **CallSession**, not an AudioSocketConnection: the pipeline
+    side no longer knows which vendor the audio came from.
+    """
+
+    def __init__(self, session: CallSession, params: TransportParams, **kwargs):
         super().__init__(params, **kwargs)
-        self._conn = conn
+        self._session = session
         self._pump_task = None
 
     async def start(self, frame: StartFrame):
@@ -277,7 +304,7 @@ class AudioSocketInputTransport(BaseInputTransport):
 
     async def _pump_loop(self):
         while True:
-            payload = await self._conn.incoming.get()
+            payload = await self._session.read_audio()
             if payload is None:  # sentinel: call ended
                 break
             await self.push_audio_frame(
@@ -298,32 +325,31 @@ class AudioSocketInputTransport(BaseInputTransport):
 
 
 class AudioSocketOutputTransport(BaseOutputTransport):
-    """Hands the agent's audio to the write thread (which paces + sends it)."""
+    """Hands the agent's audio to the CallSession, which paces + sends it."""
 
-    def __init__(self, conn: AudioSocketConnection, params: TransportParams, **kwargs):
+    def __init__(self, session: CallSession, params: TransportParams, **kwargs):
         super().__init__(params, **kwargs)
-        self._conn = conn
+        self._session = session
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
         await self.set_transport_ready(frame)
 
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
-        # The output queue is bounded, so put() blocks until the write thread has
-        # room -- i.e. until real playback catches up. We run that blocking put
-        # in a worker thread so it paces us without blocking the event loop.
-        await asyncio.get_event_loop().run_in_executor(
-            None, self._conn.queue_output, frame.audio
-        )
+        # write_audio() blocks (asynchronously) until the vendor is ready for
+        # more -- for Asterisk, until real playback catches up. That
+        # back-pressure is what paces the agent's speech and keeps Pipecat's
+        # bot-speaking timing honest, so do NOT make this fire-and-forget.
+        await self._session.write_audio(frame.audio)
         return True
 
 
 class AudioSocketTransport(BaseTransport):
     """Bundles the input and output halves for one phone call."""
 
-    def __init__(self, conn: AudioSocketConnection, params: TransportParams | None = None, **kwargs):
+    def __init__(self, session: CallSession, params: TransportParams | None = None, **kwargs):
         super().__init__(**kwargs)
-        self._conn = conn
+        self._session = session
         self._params = params or TransportParams(
             audio_in_enabled=True,
             audio_in_sample_rate=SAMPLE_RATE,
@@ -338,10 +364,10 @@ class AudioSocketTransport(BaseTransport):
 
     def input(self) -> FrameProcessor:
         if not self._input:
-            self._input = AudioSocketInputTransport(self._conn, self._params)
+            self._input = AudioSocketInputTransport(self._session, self._params)
         return self._input
 
     def output(self) -> FrameProcessor:
         if not self._output:
-            self._output = AudioSocketOutputTransport(self._conn, self._params)
+            self._output = AudioSocketOutputTransport(self._session, self._params)
         return self._output

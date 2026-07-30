@@ -13,3 +13,8 @@ recordings/
 
 # Test run logs
 *.log
+
+# Obsidian per-machine UI state (which panes are open, window geometry).
+# The rest of .obsidian/ IS committed, so vault settings are shared.
+docs-vault/.obsidian/workspace.json
+docs-vault/.obsidian/workspace-mobile.json
