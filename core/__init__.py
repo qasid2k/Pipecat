@@ -5,6 +5,7 @@ that knows about Pipecat belongs in `engine/`.
 """
 
 from core.engine import Engine
+from core.pool import AgentPool, PoolStats
 from core.transport import (
     CANONICAL_CHANNELS,
     CANONICAL_FRAME_BYTES,
@@ -17,6 +18,8 @@ from core.transport import (
 
 __all__ = [
     "Engine",
+    "AgentPool",
+    "PoolStats",
     "BaseTransport",
     "CallSession",
     "CANONICAL_SAMPLE_RATE",

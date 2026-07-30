@@ -552,3 +552,92 @@ are frozen and `dataclasses.replace` copies, so two calls preparing two personas
 concurrently cannot interfere and the shared config is never mutated.
 `PoolPersona` deliberately holds no conversation state — all state lives in the
 per-call engine, which is why a persona can be safely reused by the next caller.
+
+---
+
+## 028 — The pool holds frozen descriptions, and `release()` is idempotent
+*Date: 2026-07-31*
+
+**Decision.** `AgentPool` keeps a list of free personas and a dict of busy ones
+keyed by name, moved between the two under an `asyncio.Lock`. `acquire()` returns
+`None` when full rather than blocking or raising. `release()` returns a persona
+only if it was actually busy, returns a bool rather than raising, and does
+nothing on a second call.
+
+**Why each part.**
+
+*Returning `None`, not blocking.* "Everyone is busy" is a normal outcome, not an
+error. A caller parked on a lock waiting for a slot hears silence; a caller told
+the pool is full hears a message and knows to ring back. Blocking would also turn
+the busy path into an unbounded queue by accident, which is explicitly a later
+project.
+
+*Idempotent release.* The obvious implementation appends to the free list every
+time. Release the same persona twice — a retry, an overlapping cleanup path, a
+`finally` that runs after an inner one already ran — and that persona is in the
+list twice. Capacity silently becomes N+1 and **two concurrent callers can be
+handed the same agent**, which is the one thing this class exists to prevent.
+Ignoring an unknown release fails in the safe direction: capacity can read one
+too low, but nobody is ever double-booked.
+
+*Never raising.* `release()` is called from a `finally`, frequently while an
+exception is already propagating. An exception raised there would replace the
+original one, and the actual cause of the failure would be lost. Test:
+`test_release_never_raises_inside_a_finally`.
+
+*The lock.* Honest position: on one event loop it is not needed today. There is
+no `await` between reading `_free` and writing `_busy`, so the critical section
+cannot be interrupted. A mutation test confirms this — deleting the lock makes no
+test fail. It is kept for the failure it prevents *later*: the day someone adds
+an `await` inside that section (a metrics call, a database write), atomicity
+disappears silently and the symptom is two callers hearing the same agent,
+rarely, under load. That bug would be nearly unreproducible. Making the critical
+section explicit costs nothing.
+
+**Consequences.** `acquire()`/`release()` are event-loop-only — `asyncio.Lock` is
+not thread-safe, so calling them from the AudioSocket I/O threads
+([[decisions]] 001) would corrupt the pool. `stats()` is deliberately lock-free:
+it only reads, and no writer can be caught half-done on the same loop.
+
+The pool guarantees *mutual exclusion*, not *isolation*. Isolation comes from
+each call building its own engine and discarding it. `PoolPersona` is frozen and
+carries no conversation state, which is what makes handing the same persona to a
+later caller safe — put something stateful in it and the privacy guarantee is
+gone without a single test going red.
+
+---
+
+## 029 — A freed persona is handed out first (last-freed-first, not round-robin)
+*Date: 2026-07-31*
+
+**Decision.** `acquire()` pops the end of the free list, so the most recently
+released persona is the next one out.
+
+**Why.** The property that actually matters here is that a reused persona starts
+a *clean* conversation. Last-freed-first makes that observable in two sequential
+calls: hang up on Alex, ring back, get Alex, confirm he remembers nothing.
+Round-robin over three personas would need four calls to see the same agent
+twice, and a check that tedious is a check that stops being run.
+
+**Consequences.** Under light traffic one persona takes most calls. That costs
+nothing — personas are stateless descriptions, not resources that wear — but it
+does mean a caller who rings straight back usually gets the same agent, who has
+no memory of them. If that reads as uncanny in practice, changing `pop()` to
+`pop(0)` makes it round-robin; nothing else depends on the order.
+
+---
+
+## 030 — Tests use stdlib `unittest`, not pytest
+*Date: 2026-07-31*
+
+**Decision.** `tests/test_pool.py` uses `unittest.IsolatedAsyncioTestCase`.
+Run with `python -m unittest discover -s tests -t . -v`.
+
+**Why.** pytest plus pytest-asyncio would be two dependencies to pin and install
+on both the VM and the laptop — and a version split between those two machines
+has already caused silent drift once ([[bugs]], the 1.5.0/1.6.0 API divergence).
+`IsolatedAsyncioTestCase` gives each test a fresh event loop, which is precisely
+what async pool tests need, for nothing.
+
+**Consequences.** No fixtures or parametrisation; a `roster(n)` helper covers it
+at this size. Revisit if the suite grows enough that the boilerplate hurts.
