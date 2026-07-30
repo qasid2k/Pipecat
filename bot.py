@@ -18,7 +18,7 @@ The pipeline, stage by stage:
     aggregators.assistant()  records what the agent said, so it remembers
 
 Swapping a provider = changing ONE line in build_pipeline().
-Verified against pipecat-ai 1.5.0.
+Verified against pipecat-ai 1.6.0 (pinned in requirements.txt).
 """
 
 import asyncio

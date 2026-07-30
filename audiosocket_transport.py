@@ -21,7 +21,7 @@ Two other rules baked in:
     AudioSocket is lockstep; if we go quiet it stops forwarding the caller.
   * Pace output to real time (20ms/frame) so Asterisk doesn't drop a burst.
 
-Verified against pipecat-ai 1.5.0.
+Verified against pipecat-ai 1.6.0 (pinned in requirements.txt).
 """
 
 import asyncio

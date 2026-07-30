@@ -1,2 +1,8 @@
-pipecat-ai[deepgram,google,silero]
+# PINNED. The VM and the dev laptop must run the SAME version -- a 1.5.0/1.6.0
+# split caused silent API drift once already. Bump this file, then reinstall on
+# BOTH machines: pip install -r requirements.txt
+pipecat-ai[deepgram,google,silero]==1.6.0
 python-dotenv
+# ari_controller.py imports aiohttp directly (REST + the events WebSocket).
+# It also arrives via pipecat, but a direct import deserves a direct entry.
+aiohttp
