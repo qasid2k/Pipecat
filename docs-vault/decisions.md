@@ -476,3 +476,34 @@ be an absurd failure mode.
 byte-identical to the prompt that was hardcoded before, so the agent's behaviour
 is genuinely unchanged. An inline `system_prompt` is still allowed for short
 experiments; setting both is an error.
+
+---
+
+## 025 — Phase 5 (Twilio) deferred rather than built unverified
+*Date: 2026-07-30*
+
+**Decision.** Stop the modular/configurable project after Phase 4. The Twilio
+transport is designed and documented in [[runbook]] but not implemented.
+
+**Why.** Phase 5's purpose was never "support Twilio" — it was to *prove* the
+transport abstraction by exercising it with a genuinely different vendor. With
+no Twilio account available to test against, the code could not have been
+verified against a real carrier, and an unverified adapter proves nothing while
+still costing maintenance. Every other phase in this project was checked before
+it was committed; adding one unproven part would have been the weakest thing in
+the repo and the easiest to trust by mistake.
+
+**What that costs.** The abstraction is untested against a second vendor, so its
+shape is an informed guess, not a demonstrated fact. The known-shaky points are
+recorded in [[runbook]] so the next person meets them deliberately:
+`write_audio()` self-pacing, `reject()` finally having a real job, and the
+department→number mapping needing to become config because there is no dialplan.
+
+**One design note worth keeping.** The obvious shortcut — reuse Pipecat's Twilio
+serializer for mu-law — must be avoided. It would make `transports/` import
+Pipecat, undoing [[decisions]] 018 and leaving a vendor's audio path broken if
+the engine were ever swapped. `audioop` is no help either: deprecated and removed
+in Python 3.13, so leaning on it would silently cap the project's Python
+version. G.711 is about forty lines and two lookup tables, and can be proven
+bit-exact against `audioop` as a test oracle while never depending on it at
+runtime.

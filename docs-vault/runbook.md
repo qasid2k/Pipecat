@@ -259,7 +259,12 @@ Pipecat already abstracts providers, so we add **no** wrapper classes of our own
    resample, which breaks [[decisions]] 003 — treat that as a design decision
    needing a new entry, not a quick fix.
 
-### Add a telephony transport (e.g. Twilio)
+### Add a telephony transport (e.g. Twilio) — NOT BUILT YET
+> **Status: deferred, 2026-07-30.** Designed but deliberately not implemented,
+> because there was no Twilio account to verify it against and unverified code
+> was worth less than an honest gap. The design notes below are the result of
+> the Phase 5 work; see [[decisions]] 025 for the reasoning.
+
 Copy `transports/asterisk.py` as the worked example; the contracts it implements
 are documented in `core/transport.py`.
 1. Add `transports/<vendor>.py` implementing `BaseTransport` (`start`, `stop`,
@@ -278,6 +283,37 @@ are documented in `core/transport.py`.
 6. Register it in `create_transport()` and select it with
    `transport.provider:` in `config.yaml` — **no core code change**.
 7. Leave the Asterisk path untouched, and re-run §5 against Asterisk to prove it.
+
+#### Twilio specifics, worked out in advance
+
+* **Audio arrives over a WebSocket we host**, not a socket the vendor listens on.
+  Twilio connects after a TwiML `<Connect><Stream url="wss://…"/>`, then sends
+  JSON events: `connected`, `start` (carries `streamSid` and `callSid` — the
+  handles everything else needs), `media` (base64 mu-law), `stop`. We already
+  depend on `aiohttp`, whose `web.WebSocketResponse` can host this with no new
+  dependency.
+* **Convert mu-law → canonical 8 kHz slin inside the adapter**, and buffer to
+  exactly 320-byte frames. **Do not import Pipecat's Twilio serializer** to do
+  it — that would make `transports/` depend on the engine and undo Phase 3
+  ([[decisions]] 025). `audioop` is not an option either: deprecated, and
+  **removed in Python 3.13**. G.711 is ~40 lines with two lookup tables, and can
+  be verified bit-exact against `audioop` on 3.12 as a test oracle.
+* **`write_audio()` must pace itself.** This is the subtle one. Asterisk gets
+  pacing for free from the bounded outgoing queue; Twilio accepts everything you
+  send it and buffers, so an unpaced adapter would dump a whole TTS utterance in
+  one go. The audio would still *play*, but Pipecat's idea of when the bot is
+  speaking would be wrong, which breaks barge-in. Pace off a monotonic clock at
+  20 ms/frame, the same discipline as the AudioSocket write thread.
+* **`transfer()` is a REST call**, not a dialplan hand-off: update the live call
+  with TwiML `<Dial>` to the department's number. Twilio has no dialplan, so
+  **the department → number mapping becomes config**, and the DIALSTATUS "no one
+  available" behaviour has to be rebuilt app-side with a `<Dial action="…">`
+  callback pointing at an endpoint we serve.
+* **`reject()` finally earns its place.** On Asterisk, capacity is the dialplan's
+  problem; on Twilio there is nowhere else to put it, so the adapter must answer
+  and say something itself.
+* **Only the selected provider's config is validated**, so adding a `twilio:`
+  block does not force Asterisk users to hold Twilio credentials, and vice versa.
 
 ### Change the persona
 Today: edit the `SYSTEM_PROMPT` block in `engine/pipecat_engine.py`. From

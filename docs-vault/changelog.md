@@ -5,6 +5,35 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-07-30 — Project complete through Phase 4; Phase 5 deferred
+The modular + configurable refactor is done and live-verified through Phase 4.
+
+**Delivered:**
+1. **Documentation memory** — this Obsidian vault: architecture, 25 decisions,
+   10 bugs, a runbook and this changelog.
+2. **Modular** — the telephony vendor sits behind `CallSession` /
+   `BaseTransport`, and Pipecat behind `Engine`. Two invariants are
+   machine-checked: nothing outside `engine/` imports Pipecat, and `core/`
+   imports only `abc`, `typing`, `asyncio`.
+3. **Configurable** — `config.yaml` drives transport, providers, model, voice,
+   persona and turn-taking, with secrets confined to `.env` and every setting
+   validated at startup.
+
+Plus one real bug found and fixed along the way ([[bugs]] B-010), which itself
+uncovered three more.
+
+**Not delivered: Phase 5 (Twilio).** Deliberately deferred rather than built
+unverified — there was no Twilio account to test against, and the phase existed
+to *prove* the abstraction, which unrunnable code cannot do. The design is
+worked out and recorded in [[runbook]]; the reasoning is [[decisions]] 025.
+
+**Therefore the honest caveat on goal #2:** the transport abstraction has been
+exercised by exactly one vendor, so its shape is an informed design, not a
+demonstrated one. The three points most likely to need adjustment when a second
+vendor arrives are listed in the runbook.
+
+---
+
 ## 2026-07-30 — Phase 4: config file + factories (the agent is now configurable)
 See [[decisions]] 021–024 and the full key reference in [[runbook]].
 
