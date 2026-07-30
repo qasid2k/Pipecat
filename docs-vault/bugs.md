@@ -144,3 +144,52 @@ raises `StasisStart`, so the handler saw it as an incoming caller.
 
 **Fix.** Track the ids we generate in `self._em_ids` and return early from
 `_on_stasis_start` for any channel in that set (`ari_controller.py:109`).
+
+---
+
+## B-010 — `addChannel` 422 "Channel not in Stasis application" ⚠️ OPEN
+**Status: observed 2026-07-30, NOT yet fixed.** Intermittent and usually
+harmless; the call it was first seen on worked fine (greeting, conversation,
+transfer and the two-concurrent-call test all passed).
+
+**Symptom.**
+```
+ARI POST /bridges/{id}/addChannel -> 422: {"message": "Channel not in Stasis application"}
+ARI: <chan> bridged into the AI pipeline (uuid=...)      <-- logged anyway
+```
+The second line is printed **unconditionally** right after the failing call, so
+the log claims success it did not get.
+
+**Root cause.** A race on the External Media channel.
+`POST /channels/externalMedia` returns as soon as Asterisk has *created* the
+channel, but the channel only *enters* the Stasis app a moment later —
+asynchronously, announced by its own `StasisStart` event. `addChannel` requires
+it to be in Stasis already, so an `addChannel` issued immediately can arrive a
+few milliseconds too early. It usually wins the race, which is why this was
+never noticed while the demo was stable.
+
+Two things hide it: `_on_stasis_start` ignores what `_add()` returns, and the
+success message above is not conditional on it.
+
+**Why it matters.** When the race *is* lost for real, the media leg never joins
+the bridge, so there is no audio path in either direction: the caller hears
+silence, `in=0`, and the call dies at the 30 s idle timeout. Indistinguishable
+in the logs from several other faults — which is the actual cost of the lying
+success message.
+
+**Not caused by the Phase 2 refactor.** Diffed against the demo-stable commit
+`519cd29`: the only change to `ari_controller.py` was the new `caller_id` field.
+The sequence of ARI calls is byte-identical.
+
+**Planned fix.** Wait for the EM channel's own `StasisStart` before adding it to
+the bridge, instead of assuming it has arrived. `_em_ids` is already tracked; the
+early `return` currently throws that event away, and it can set an
+`asyncio.Event` instead. Also check `_add()`'s result so the success line stops
+lying.
+
+> **Trap to design around:** you cannot simply `await` that event inside
+> `_on_stasis_start`. The ARI WebSocket loop handles messages one at a time
+> (`await self._on_stasis_start(event)`), so blocking there means the EM
+> channel's `StasisStart` can never be read — it deadlocks for the whole
+> timeout. The handler must be dispatched as a task so the read loop keeps
+> draining events.
