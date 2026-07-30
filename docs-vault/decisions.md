@@ -507,3 +507,48 @@ in Python 3.13, so leaning on it would silently cap the project's Python
 version. G.711 is about forty lines and two lookup tables, and can be proven
 bit-exact against `audioop` as a test oracle while never depending on it at
 runtime.
+
+---
+
+## 026 — Capacity is derived from the persona roster, not configured separately
+*Date: 2026-07-30*
+
+**Decision.** N — the maximum number of simultaneous calls — is `len(pool.personas)`.
+There is no `max_concurrent_calls` setting. A persona is one agent, an agent takes
+one call, so the roster *is* the capacity.
+
+**Why.** Two numbers that must agree are two numbers that eventually will not.
+A separate cap invites `capacity: 5` over a roster of three, which fails as
+"caller five hears silence" — the pool hands out nothing but the app believed it
+had room. Deriving it makes the disagreement unrepresentable.
+
+**Consequences.** Adding an agent raises capacity as a side effect; that is
+intended, but it means capacity changes must be checked against provider
+concurrency limits (one Deepgram key, one Gemini key, N concurrent streams each
+— see [[runbook]]). One number still cannot be derived: the Asterisk dialplan
+`GROUP` cap, which cannot read `config.yaml`. It is kept equal by hand and that
+obligation is written down in [[runbook]] and [[personas]] rather than trusted
+to memory. Superseded only if a persona is ever allowed to take more than one
+call at a time.
+
+---
+
+## 027 — A persona is an override of engine settings, not a new object
+*Date: 2026-07-30*
+
+**Decision.** `PoolPersona` holds only `name`, `voice`, `system_prompt`,
+`company`, `greeting`. Building its engine means `config_for_persona()` returning
+a copy of the shared `AppConfig` with those applied, then calling the *existing*
+`create_engine()`. Nothing inside the engine knows personas exist.
+
+**Why.** The alternative — a persona-aware engine builder — would be a second
+path for constructing an engine, and second paths drift. Every provider, model,
+timeout and bug fix would have to be applied twice. As an override, a persona
+inherits all of that for free, and the engine keeps a single constructor.
+
+**Consequences.** Anything that must differ per persona has to be expressible as
+an engine setting; that is currently true and worth preserving. The dataclasses
+are frozen and `dataclasses.replace` copies, so two calls preparing two personas
+concurrently cannot interfere and the shared config is never mutated.
+`PoolPersona` deliberately holds no conversation state — all state lives in the
+per-call engine, which is why a persona can be safely reused by the next caller.

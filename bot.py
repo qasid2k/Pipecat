@@ -92,6 +92,13 @@ if __name__ == "__main__":
         f"| {cfg.engine.stt.provider} STT -> {cfg.engine.llm.model} -> "
         f"{cfg.engine.tts.voice}"
     )
+    # The roster is loaded and validated now, but not yet wired into the call
+    # path -- Phase 3 does that. Logging it here proves the config is good
+    # before a real caller depends on it.
+    logger.info(
+        f"Pool: {cfg.pool.capacity} persona(s) -> "
+        + ", ".join(f"{p.name} ({p.voice})" for p in cfg.pool.personas)
+    )
 
     try:
         asyncio.run(main(cfg))

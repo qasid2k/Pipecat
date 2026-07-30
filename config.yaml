@@ -105,3 +105,43 @@ engine:
   # How long to let the agent's "connecting you now" line play before actually
   # transferring. Too short and the caller is cut off mid-sentence.
   transfer_announce_s: 3.0
+
+# =============================================================================
+#  The agent pool: the roster of people who can answer the phone.
+#
+#  Each entry is one agent with their own name, voice and instructions. Every
+#  other setting -- providers, models, keys, turn-taking -- comes from engine:
+#  above and is shared, so adding an agent is three lines here plus a prompt
+#  file. Callers on at the same time always get DIFFERENT agents.
+#
+#  CAPACITY: N = the number of personas listed here. Three personas means three
+#  simultaneous calls; the fourth caller is told everyone is busy. This list is
+#  the only place N is defined in the app.
+#
+#  KEEP IN SYNC: the Asterisk dialplan has its own cap (Phase 4) which cannot
+#  read this file. If you add or remove a persona, update that number too --
+#  see docs-vault/runbook.md. Personas and voices are not secret; they belong
+#  in this file. Changing them needs a bot restart.
+#
+#  Voices are Deepgram Aura-2 names. Pick clearly distinguishable ones: two
+#  agents who sound alike defeat the point of the pool for the caller.
+# =============================================================================
+pool:
+  personas:
+    - name: Alex
+      voice: aura-2-helena-en
+      # {name} and {company} in the file are substituted per persona.
+      system_prompt_file: prompts/alex.txt
+
+    - name: Sarah
+      voice: aura-2-thalia-en
+      system_prompt_file: prompts/sarah.txt
+
+    - name: Daniel
+      voice: aura-2-orion-en
+      system_prompt_file: prompts/daniel.txt
+
+  # Each persona also accepts `company:` and `greeting:` to override the
+  # defaults inherited from engine.persona. Omit `pool:` entirely and the
+  # service runs as a pool of one, built from engine.persona -- exactly the
+  # single-agent behaviour it had before pooling existed.
