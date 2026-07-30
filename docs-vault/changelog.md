@@ -5,6 +5,42 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-07-30 — Phase 4: config file + factories (the agent is now configurable)
+See [[decisions]] 021–024 and the full key reference in [[runbook]].
+
+* **`config.yaml`** — vendor, providers, model, voice, persona, turn-taking. The
+  shipped values reproduce the previous hardcoded behaviour **exactly**
+  (verified, including the system prompt being textually identical).
+* **`prompts/alex.txt`** — the system prompt, with `{name}` / `{company}`
+  placeholders.
+* **`core/config.py`** — typed frozen dataclasses + a validating loader.
+  Unknown keys, missing required keys, unsupported providers, out-of-range VAD
+  timeouts and unreadable prompt files are all **startup** errors naming the
+  exact dotted path. Missing environment variables are reported **all at once**.
+* **`factories.py`** — `create_transport(config)` / `create_engine(config)`,
+  deliberately outside `core/` so the layering survives.
+* `PipecatEngine` builds its STT/LLM/TTS services and turn-taking from config.
+  `smart_turn_v3: true` hands turn-taking back to Pipecat's default model.
+* `transport_from_env()` removed — `config.yaml` is now the single source of
+  truth, and two ways to configure one thing is how a machine ends up running
+  settings nobody can find.
+* **Secrets rule enforced**: `config.yaml` names env vars and never holds
+  values; only 4 secrets remain in `.env`. `.env.example` rewritten to match.
+* `config.local.yaml` git-ignored for machine-specific overrides; the config
+  file can also be chosen by argument or `$VOICEAGENT_CONFIG`.
+* Startup now logs which config file was loaded and what it selected.
+
+**Two behaviour changes worth knowing:**
+1. `AUDIOSOCKET_HOST/PORT`, `ARI_BASE_URL`, `ARI_APP` and `TRANSFER_CONTEXT` no
+   longer do anything in `.env` — they moved to `config.yaml`.
+2. Missing ARI credentials are now a **startup failure**, not a silent downgrade
+   to "transfer quietly broken" ([[decisions]] 022).
+
+36/36 Phase 4 checks; Phase 2 (26/26), Phase 3 (19/19) and B-010 (28/28) all
+still green — **109 total**. **Needs a live call to confirm.**
+
+---
+
 ## 2026-07-30 — Phase 3: Pipecat isolated behind our own Engine interface
 **Structural only — no behaviour change intended.** See [[decisions]] 018–020.
 

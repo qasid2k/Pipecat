@@ -52,7 +52,6 @@ Verified against pipecat-ai 1.6.0 (this module itself imports no Pipecat).
 """
 
 import asyncio
-import os
 import socket
 import threading
 from typing import AsyncIterator
@@ -380,19 +379,7 @@ class AsteriskTransport(BaseTransport):
         await call.hangup()
 
 
-def transport_from_env() -> AsteriskTransport:
-    """Build the transport from environment variables -- the same ones bot.py
-    used before this refactor, so nothing about configuration changed yet.
-
-    Phase 4 replaces this with a config.yaml loader + factory. It is a separate
-    function so that swap touches one call site.
-    """
-    return AsteriskTransport(
-        host=os.getenv("AUDIOSOCKET_HOST", "0.0.0.0"),
-        port=int(os.getenv("AUDIOSOCKET_PORT", "8090")),
-        ari_base_url=os.getenv("ARI_BASE_URL", "http://localhost:8088"),
-        ari_app=os.getenv("ARI_APP", "voiceagent"),
-        ari_user=os.getenv("ARI_USER", "voiceagent"),
-        ari_password=os.getenv("ARI_PASSWORD"),
-        transfer_context=os.getenv("TRANSFER_CONTEXT", "transfer"),
-    )
+# NOTE: there is deliberately no transport_from_env() here any more. Phase 4
+# made config.yaml the single source of truth for these settings, and two ways
+# to configure the same thing is how a machine ends up running settings nobody
+# can find. See factories.create_transport().

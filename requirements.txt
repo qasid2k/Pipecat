@@ -6,3 +6,5 @@ python-dotenv
 # ari_controller.py imports aiohttp directly (REST + the events WebSocket).
 # It also arrives via pipecat, but a direct import deserves a direct entry.
 aiohttp
+# core/config.py parses config.yaml.
+PyYAML

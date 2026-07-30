@@ -1,6 +1,11 @@
 # Secrets -- never commit real API keys
 .env
 
+# Machine-specific config overrides. config.yaml IS committed (it holds no
+# secrets); use this name, or $VOICEAGENT_CONFIG, for local experiments you
+# don't want to push -- e.g. running without ARI on a dev laptop.
+config.local.yaml
+
 # Virtual environment (rebuildable from requirements)
 .venv/
 

@@ -5,28 +5,32 @@ After Phases 2 and 3 this file is deliberately almost empty: get a transport,
 get an engine, introduce them to each other. It imports no Pipecat, opens no
 socket and makes no ARI call.
 
+    config.yaml               WHAT to run: vendor, providers, model, voice, persona
+    core/config.py            the typed, validated loader for it
     core/transport.py         CallSession + BaseTransport contracts (vendor-neutral)
     core/engine.py            Engine contract (engine-neutral)
+    factories.py              turns config into the actual objects
     transports/asterisk.py    Asterisk/FreePBX: ARI + AudioSocket + transfer
     transports/audiosocket.py the AudioSocket protocol + its I/O threads
     engine/pipecat_engine.py  the Pipecat conversation: STT -> LLM -> TTS + tools
     bot.py (this file)        wiring
 
-Phase 4 replaces the two "which one?" decisions below with config.yaml lookups,
-so switching transport or engine needs no code change at all.
+Switching telephony vendor, swapping an STT/LLM/TTS provider, changing the
+voice, the persona or the turn-taking timing are all config.yaml edits. Secrets
+are never in that file -- it names environment variables, and .env holds them.
+
+    python bot.py [path/to/config.yaml]     # or set VOICEAGENT_CONFIG
 """
 
 import asyncio
-import os
 import sys
 
 from dotenv import load_dotenv
 from loguru import logger
 
-from core.engine import Engine
+from core.config import AppConfig, ConfigError, load_config
 from core.transport import CallSession
-from engine.pipecat_engine import PipecatEngine
-from transports.asterisk import transport_from_env
+from factories import create_engine, create_transport
 
 load_dotenv()
 
@@ -35,16 +39,7 @@ load_dotenv()
 _active_calls: set[asyncio.Task] = set()
 
 
-def create_engine() -> Engine:
-    """Build the conversation engine for one call.
-
-    Phase 4 turns this into create_engine(config), selecting the engine by name.
-    A new engine per call because each holds that call's conversation state.
-    """
-    return PipecatEngine()
-
-
-async def run_call(session: CallSession):
+async def run_call(config: AppConfig, session: CallSession):
     """One call: hand it to an engine, and guarantee cleanup afterwards.
 
     The `finally` is the point. Whether the conversation ended normally, the
@@ -55,7 +50,7 @@ async def run_call(session: CallSession):
     hang up the caller's channel, which after a transfer may be talking to a
     human -- see AsteriskCallSession.hangup.)
     """
-    engine = create_engine()
+    engine = create_engine(config)
     try:
         await engine.run(session)
     except Exception as e:
@@ -64,26 +59,15 @@ async def run_call(session: CallSession):
         await session.hangup()
 
 
-def check_keys():
-    """Fail loudly at startup rather than mysteriously mid-call."""
-    missing = [k for k in ("DEEPGRAM_API_KEY", "GEMINI_API_KEY") if not os.getenv(k)]
-    if missing:
-        logger.error(f"Missing in .env: {', '.join(missing)}")
-        logger.error("Open the .env file and paste your keys after the '=' signs.")
-        sys.exit(1)
-
-
-async def main():
-    check_keys()
-
-    transport = transport_from_env()  # Phase 4: create_transport(config)
+async def main(config: AppConfig):
+    transport = create_transport(config)
     await transport.start()
 
     try:
         async for session in transport.listen():
             # One TASK per call, deliberately: awaiting run_call here would run
             # calls one at a time and destroy concurrency.
-            task = asyncio.create_task(run_call(session))
+            task = asyncio.create_task(run_call(config, session))
             _active_calls.add(task)
             task.add_done_callback(_active_calls.discard)
     finally:
@@ -91,7 +75,25 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Config is loaded and fully validated BEFORE anything starts listening, so
+    # a bad setting is a startup error with a clear message rather than a
+    # surprise on the first call.
     try:
-        asyncio.run(main())
+        cfg = load_config(sys.argv[1] if len(sys.argv) > 1 else None)
+    except ConfigError as e:
+        logger.error(f"Configuration problem:\n{e}")
+        sys.exit(1)
+
+    p = cfg.engine.persona
+    logger.info(f"Config: {cfg.source}")
+    logger.info(
+        f"Agent '{p.name}' for {p.company} | transport={cfg.transport.provider} "
+        f"| engine={cfg.engine.provider} "
+        f"| {cfg.engine.stt.provider} STT -> {cfg.engine.llm.model} -> "
+        f"{cfg.engine.tts.voice}"
+    )
+
+    try:
+        asyncio.run(main(cfg))
     except KeyboardInterrupt:
         logger.info("Shutting down.")

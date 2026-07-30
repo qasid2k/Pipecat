@@ -28,35 +28,100 @@ pip install -r requirements.txt
 
 ## 2. Secrets and configuration
 
-Copy `.env.example` to `.env` and fill it in. **`.env` is git-ignored — never
-commit real keys.** (`.gitignore` also excludes `.venv/`, `__pycache__/`,
-`recordings/` and `*.log`.)
+Two files, with a strict split:
 
-| Variable | Required? | Default | What it does |
-|---|---|---|---|
-| `DEEPGRAM_API_KEY` | **yes** | — | one key serves **both** STT and TTS |
-| `GEMINI_API_KEY` | **yes** | — | the LLM |
-| `AUDIOSOCKET_HOST` | no | `0.0.0.0` | address the AudioSocket server binds |
-| `AUDIOSOCKET_PORT` | no | `8090` | port; also handed to ARI as the media port |
-| `ARI_BASE_URL` | no | `http://localhost:8088` | Asterisk ARI HTTP endpoint |
-| `ARI_APP` | no | `voiceagent` | must match `Stasis(...)` in the dialplan |
-| `ARI_USER` | no | `voiceagent` | must match `/etc/asterisk/ari.conf` |
-| `ARI_PASSWORD` | **for transfer** | — | **ARI only starts if this is set** |
-| `TRANSFER_CONTEXT` | no | `transfer` | dialplan context transfers land in |
+* **`.env`** — secrets ONLY. Git-ignored. Copy from `.env.example`.
+* **`config.yaml`** — everything else. **Safe to commit**: it names environment
+  variables (`api_key_env: DEEPGRAM_API_KEY`) but never holds their values.
 
-`check_keys()` exits immediately if a Deepgram or Gemini key is missing. A
-missing `ARI_PASSWORD` is **not** an error — the bot silently runs without call
-control, so transfer stops working. If transfer "just stopped", check this first.
+`.gitignore` also excludes `.venv/`, `__pycache__/`, `recordings/`, `*.log` and
+`config.local.yaml`.
 
-Not yet in the environment (must be edited in `engine/pipecat_engine.py` until
-Phase 4): persona/prompt, greeting, agent name, company name, LLM model, TTS
-voice, VAD timeout, department list, the 3 s transfer announcement delay and the
-30 s idle timeout.
+### `.env` — the only secrets
+
+| Variable | Required? | What it does |
+|---|---|---|
+| `DEEPGRAM_API_KEY` | **yes** | one key serves **both** STT and TTS |
+| `GEMINI_API_KEY` | **yes** | the LLM |
+| `ARI_USER` | **yes**, unless ARI is disabled | matches `/etc/asterisk/ari.conf` |
+| `ARI_PASSWORD` | **yes**, unless ARI is disabled | matches `ari.conf` |
+
+> Settings that used to live here — `AUDIOSOCKET_HOST` / `AUDIOSOCKET_PORT`,
+> `ARI_BASE_URL`, `ARI_APP`, `TRANSFER_CONTEXT` — **moved to `config.yaml`**.
+> Setting them in `.env` now does nothing.
+
+### Which config file is used
+The path given on the command line, else `$VOICEAGENT_CONFIG`, else
+`config.yaml` beside the code.
+
+```bash
+python bot.py                      # config.yaml
+python bot.py config.local.yaml    # explicit (config.local.yaml is gitignored)
+VOICEAGENT_CONFIG=/etc/agent.yaml python bot.py
+```
+
+### `config.yaml` — `transport`
+
+| Key | Default | What it does |
+|---|---|---|
+| `provider` | `asterisk` | Which vendor. Valid: `asterisk` (covers FreePBX). |
+| `asterisk.ari_url` | `http://localhost:8088` | ARI HTTP endpoint; matches `http.conf`. |
+| `asterisk.ari_app` | `voiceagent` | Must match `Stasis(...)` in the dialplan. |
+| `asterisk.ari_user_env` | `ARI_USER` | **Name** of the env var holding the ARI user. |
+| `asterisk.ari_pass_env` | `ARI_PASSWORD` | **Name** of the env var holding the password. **Comment it out to run deliberately without call control** — transfer then stops working. |
+| `asterisk.audiosocket_host` | `0.0.0.0` | Address our AudioSocket server binds. |
+| `asterisk.audiosocket_port` | `8090` | Port it binds. |
+| `asterisk.media_host` | `127.0.0.1` | Address ARI tells Asterisk to dial for media. Loopback, because the bot runs on the VM. |
+| `asterisk.transfer_context` | `transfer` | Dialplan context a transfer lands in. |
+
+### `config.yaml` — `engine`
+
+| Key | Default | What it does |
+|---|---|---|
+| `provider` | `pipecat` | Which conversation engine. Valid: `pipecat`. |
+| `stt.provider` | `deepgram` | Valid: `deepgram`. |
+| `stt.api_key_env` | `DEEPGRAM_API_KEY` | Name of the env var with the key. |
+| `stt.sample_rate` | `8000` | Telephony native; changing it breaks the no-resampling promise ([[decisions]] 003). |
+| `stt.model` | *(unset)* | Optional Deepgram model override. |
+| `llm.provider` | `google` | Valid: `google`. |
+| `llm.model` | `gemini-flash-lite-latest` | Read [[decisions]] 004 first — latency matters more than IQ on a phone call. |
+| `llm.api_key_env` | `GEMINI_API_KEY` | |
+| `tts.provider` | `deepgram` | Valid: `deepgram`. |
+| `tts.voice` | `aura-2-helena-en` | Any Deepgram Aura-2 voice. |
+| `tts.api_key_env` | `DEEPGRAM_API_KEY` | The same key as STT. |
+| `tts.sample_rate` | `8000` | |
+| `turn_taking.vad` | `silero` | Valid: `silero`. |
+| `turn_taking.silence_timeout_s` | `0.6` | Silence after speech before the turn ends. Must be 0.05–10; ~0.3–2.0 is sane. |
+| `turn_taking.smart_turn_v3` | `false` | `true` hands turn-taking back to Pipecat's default ONNX model ([[decisions]] 005). |
+| `persona.name` | `Alex` | Substituted for `{name}` in the prompt file. |
+| `persona.company` | `Techbridge` | Substituted for `{company}`. |
+| `persona.system_prompt_file` | `prompts/alex.txt` | Path relative to config.yaml. |
+| `persona.system_prompt` | — | Inline alternative. Setting **both** is an error. |
+| `persona.greeting` | derived from name + company | Spoken immediately on answer. |
+| `idle_timeout_s` | `30` | End the call after this much total silence. |
+| `transfer_announce_s` | `3.0` | How long "connecting you now" gets to play before the transfer ([[decisions]] 008). |
+
+### What happens when it's wrong
+Bad config is a **startup** error naming the exact dotted path — never a
+surprise mid-call. Caught: unknown keys (so `voicce:` is an error, not a
+silently ignored typo), missing required keys, unsupported provider names (the
+message lists the valid ones), out-of-range VAD timeouts, an unreadable prompt
+file, and **every** missing environment variable reported in one go rather than
+one per restart.
+
+Still in code, not config: the transfer **department list**
+(`engine/pipecat_engine.py`). It must stay in step with the `[transfer]`
+dialplan, so changing it is a two-sided change that deserves a review rather
+than a config tweak.
 
 ### Where things live
 ```
+config.yaml                WHAT to run   <- most changes land here now
+prompts/alex.txt           the system prompt
+core/config.py             the typed, validating loader
 core/transport.py          CallSession + BaseTransport contracts
 core/engine.py             Engine contract
+factories.py               config -> real objects
 transports/asterisk.py     Asterisk/FreePBX: ARI, bridge, correlation, transfer
 transports/audiosocket.py  AudioSocket protocol + I/O threads
 ari_controller.py          ARI REST/WebSocket client
@@ -74,22 +139,31 @@ bot.py                     wiring only
 python bot.py
 ```
 
-Expect on startup:
+Expect on startup — the second line is worth reading, because it tells you
+exactly which config took effect:
 
 ```
+Config: /path/to/config.yaml
+Agent 'Alex' for Techbridge | transport=asterisk | engine=pipecat | deepgram STT -> gemini-flash-lite-latest -> aura-2-helena-en
 AudioSocket server listening on 0.0.0.0:8090
 Call 6000 (direct) or 6001 (via ARI/Stasis) to talk to it.
 Transcripts will be saved to .../recordings
 ARI call control ENABLED (app 'voiceagent')
 ```
 
-If the last two lines say ARI is not configured, `ARI_PASSWORD` is unset.
+If it exits immediately with `Configuration problem:`, read the message — it
+names the exact setting or environment variable at fault.
 
-**Where to run it.** The ARI path hardcodes the media host as `127.0.0.1`
-(`bot.py:506`), so **extension 6001 and therefore transfer only work when the bot
-runs on the Asterisk VM.** The direct path (6000) can run on the dev laptop,
-because there the *dialplan* names the host — during development that was
+**Where to run it.** `transport.asterisk.media_host` defaults to `127.0.0.1`, so
+**extension 6001 and therefore transfer only work when the bot runs on the
+Asterisk VM.** The direct path (6000) can run on the dev laptop, because there
+the *dialplan* names the host — during development that was
 `192.168.100.67:8090`, i.e. Asterisk dials out to the laptop.
+
+**On a dev laptop without ARI credentials** the bot now refuses to start, rather
+than silently running with transfer broken. Either put the ARI variables in
+`.env`, or copy `config.yaml` to `config.local.yaml`, comment out `ari_pass_env`
+there, and run `python bot.py config.local.yaml`.
 
 Stop with `Ctrl+C`.
 
@@ -152,6 +226,8 @@ Artifacts land in `recordings/`:
 | Agent says it will transfer but nothing happens | [[bugs]] B-004 — a prompt problem. Check whether `TOOL: transfer_to_department` appears in the log at all. |
 | Transfer works but the caller is cut off mid-sentence | [[bugs]] B-005 — the 3 s pre-transfer delay. |
 | Transfer does nothing on extension 6000 | Expected. 6000 has no ARI channel; use 6001. |
+| Changed a setting and nothing happened | Check the `Config:` line at startup — you may be editing a different file from the one being loaded (`$VOICEAGENT_CONFIG`, or an argument). A misspelled key is a startup error, so it cannot be the cause. |
+| `Configuration problem:` at startup | Read it; it names the dotted path or the env var. This is deliberate — it fails before answering a call rather than during one. |
 | `no UUID within 2s; treating as a non-ARI call` | The AudioSocket connection was not correlated to a channel: ARI down, or the External Media `data` UUID did not arrive. Transfer will be unavailable on that call. |
 | Nothing transcribed; VAD lines never appear | No caller audio is reaching the pipeline. Check the `in=` counter in the final log line. |
 | Call ends after exactly 30 s | `idle_timeout_secs=30` — total silence. The audio path is one-way or dead. |

@@ -397,3 +397,82 @@ particular was never really Asterisk-specific: it will drive a pipeline from any
 **Consequences.** Moved with `git mv`, so history follows. One import line
 changed in the Asterisk adapter. The layout now states the architecture:
 `core/` contracts, `transports/` vendors, `engine/` conversation.
+
+---
+
+## 021 — Unknown config keys are an ERROR, not a warning
+*Date: 2026-07-30 (Phase 4)*
+
+**Decision.** The loader rejects any key it does not recognise, naming the
+dotted path and listing the valid keys for that section.
+
+**Why.** The alternative — ignore what you don't understand — turns a typo into
+a silent no-op. `voicce: aura-2-thalia-en` would leave the old voice in place,
+and the person who edited it would be left with "I changed the config and
+nothing happened", which is a genuinely horrible thing to debug because there is
+no evidence anywhere. Strictness converts that into a startup error that points
+at the line.
+
+**Consequences.** Adding a new setting means adding it to the `allowed` set as
+well as reading it — deliberate friction, in the right direction. Every setting
+is validated before anything starts listening, so a bad config can never surface
+mid-call.
+
+---
+
+## 022 — Missing ARI credentials now fail fast instead of degrading silently
+*Date: 2026-07-30 (Phase 4)*
+
+**Decision.** If `config.yaml` names `ari_pass_env`, that variable must exist or
+the bot refuses to start. To run without call control you comment the key out —
+an explicit choice rather than an accident.
+
+**Why.** Previously an unset `ARI_PASSWORD` started the bot happily with
+transfer quietly broken. That was already documented in [[runbook]] as the first
+thing to check when "transfer stopped working" — which is exactly the shape of a
+bug that should be impossible rather than documented.
+
+**Consequences.** A behaviour change, and the one most likely to surprise: a dev
+laptop with no ARI credentials will now refuse to start. The escape hatch is
+`config.local.yaml` (git-ignored) or `$VOICEAGENT_CONFIG`. Worth it — "fails
+loudly at startup" beats "works, but one feature is missing".
+
+---
+
+## 023 — The factories live outside `core/`
+*Date: 2026-07-30 (Phase 4)*
+
+**Decision.** `create_transport` / `create_engine` are in a top-level
+`factories.py`, not in `core/`. Implementations are imported lazily inside the
+functions.
+
+**Why.** A factory must import every implementation it can build. In `core/`
+that would mean core imports Asterisk and Pipecat, and the layering that
+Phases 2–3 established would be gone — the check that `core/` imports only
+`abc`, `typing` and `asyncio` would fail. The factory belongs *above* the
+layers, next to `bot.py`, the one place allowed to know what is actually being
+run. Lazy imports mean an unused vendor's dependencies never need installing.
+
+**Consequences.** One module knows every name; everything else knows only the
+contracts. Adding a vendor is a new module plus one branch here.
+
+---
+
+## 024 — The persona prompt is a file with placeholders
+*Date: 2026-07-30 (Phase 4)*
+
+**Decision.** `prompts/alex.txt`, with `{name}` and `{company}` substituted from
+`persona.name` / `persona.company`. Substitution is `str.replace`, not
+`str.format`.
+
+**Why.** A prompt is prose, and prose belongs in a text file where it can be
+edited and diffed without touching Python or worrying about quoting. The
+placeholders keep `persona.name` meaningful rather than decorative. `str.replace`
+because a stray `{` in prompt text must not raise — prompts get pasted in from
+all sorts of places, and a formatting crash at startup over a curly brace would
+be an absurd failure mode.
+
+**Consequences.** Verified that the file's text, after substitution, is
+byte-identical to the prompt that was hardcoded before, so the agent's behaviour
+is genuinely unchanged. An inline `system_prompt` is still allowed for short
+experiments; setting both is an error.

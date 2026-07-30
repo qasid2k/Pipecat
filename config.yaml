@@ -1,0 +1,107 @@
+# =============================================================================
+#  Voice agent configuration.
+#
+#  SAFE TO COMMIT. This file holds no secrets -- only the NAMES of environment
+#  variables that hold them (`api_key_env: DEEPGRAM_API_KEY`). Real keys live in
+#  .env, which is git-ignored. Never paste a key into this file.
+#
+#  The values below reproduce the behaviour the agent has always had, so a fresh
+#  checkout behaves identically. Change one and restart; no code edit needed.
+#
+#  Mistakes are caught at startup, not mid-call: an unknown key, a missing
+#  required key, or an environment variable named here but not set will refuse
+#  to start and tell you exactly which line is wrong.
+# =============================================================================
+
+transport:
+  # Which telephony vendor. Currently: asterisk (also covers FreePBX).
+  provider: asterisk
+
+  asterisk:
+    # Asterisk's REST interface. Must match http.conf on the VM.
+    ari_url: http://localhost:8088
+    # Must match the Stasis(...) application name in extensions.conf.
+    ari_app: voiceagent
+
+    # NAMES of env vars, not the values. Matches the [voiceagent] user in
+    # /etc/asterisk/ari.conf.
+    ari_user_env: ARI_USER
+    ari_pass_env: ARI_PASSWORD
+    # To run deliberately WITHOUT call control, comment out ari_pass_env above.
+    # Audio and conversation still work; transfer does not. (Leaving it set but
+    # the variable unset is an error, not a silent downgrade -- that used to be
+    # a nasty way to lose transfer without noticing.)
+
+    # Where our AudioSocket server listens. 0.0.0.0 accepts both the loopback
+    # connection ARI uses and a direct connection from another host.
+    audiosocket_host: 0.0.0.0
+    audiosocket_port: 8090
+
+    # The address ARI tells Asterisk to dial for media. Loopback, because the
+    # bot runs on the Asterisk VM.
+    media_host: 127.0.0.1
+
+    # Dialplan context a transfer lands in. The department the agent picks
+    # becomes the EXTENSION in this context, so extensions.conf decides who is
+    # actually dialled -- and keeps the DIALSTATUS "no one available" handling.
+    transfer_context: transfer
+
+engine:
+  # Which conversation engine. Currently: pipecat.
+  provider: pipecat
+
+  # --- Speech to text ---
+  stt:
+    provider: deepgram
+    api_key_env: DEEPGRAM_API_KEY
+    # 8 kHz is telephony's native rate and Deepgram handles it directly, so
+    # nothing resamples anywhere. Changing this breaks that promise.
+    sample_rate: 8000
+
+  # --- The brain ---
+  llm:
+    provider: google
+    # "flash-lite" measured ~700ms on this account; "flash" ~1700ms, which is
+    # too slow to feel like a conversation. The "-latest" alias avoids the 404
+    # that killed the pinned gemini-2.5-flash when Google retired it.
+    model: gemini-flash-lite-latest
+    api_key_env: GEMINI_API_KEY
+
+  # --- Text to speech ---
+  tts:
+    provider: deepgram
+    # Deepgram Aura-2 voice. Try aura-2-thalia-en or aura-2-orion-en to hear a
+    # different agent -- takes effect on the next call, no restart of anything
+    # but the bot.
+    voice: aura-2-helena-en
+    # ONE Deepgram key serves both STT and TTS.
+    api_key_env: DEEPGRAM_API_KEY
+    sample_rate: 8000
+
+  # --- How we know the caller has finished talking ---
+  turn_taking:
+    vad: silero
+    # Seconds of silence after speech before we treat the turn as over. Lower =
+    # snappier but interrupts people who pause to think; higher = feels laggy.
+    silence_timeout_s: 0.6
+    # Pipecat's default end-of-turn model. It loads a second ONNX model and runs
+    # inference every utterance, which we don't need since Silero VAD already
+    # reports speech boundaries. true = use it instead of the timeout above.
+    smart_turn_v3: false
+
+  # --- Who the agent is ---
+  persona:
+    name: Alex
+    company: Techbridge
+    # {name} and {company} in the prompt file are substituted with the values
+    # above. Use `system_prompt:` instead for a short inline prompt.
+    system_prompt_file: prompts/alex.txt
+    # Spoken immediately on answer, so the caller never hears silence.
+    greeting: Hi, this is Alex at Techbridge. How can I help you today?
+
+  # End the call after this much TOTAL silence. Any speech resets it. Pipecat's
+  # own default is 5 minutes, which leaves dead test calls hanging around.
+  idle_timeout_s: 30
+  # How long to let the agent's "connecting you now" line play before actually
+  # transferring. Too short and the caller is cut off mid-sentence.
+  transfer_announce_s: 3.0

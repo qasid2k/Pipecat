@@ -12,7 +12,10 @@ No agent pool, no queueing, no call recording of audio (transcripts only).
 ## Layering (Phases 2 and 3)
 
 ```
-                        bot.py
+     config.yaml  ->  core/config.py  ->  factories.py
+   (what to run)      (typed loader)      (builds it)
+                                              |
+                        bot.py  <-------------+
                      (wiring only)
                     /             \
                    v               v
@@ -42,6 +45,10 @@ import. The adapter imports no Pipecat; the engine imports no Asterisk.
 
 | File | Role |
 |---|---|
+| `config.yaml` | **What to run**: vendor, providers, model, voice, persona, turn-taking. Holds no secrets — it names environment variables. Safe to commit. |
+| `prompts/alex.txt` | The system prompt, with `{name}` / `{company}` placeholders. |
+| `core/config.py` | Typed, validating loader: dataclasses, unknown-key detection, `*_env` resolution, clear startup errors. |
+| `factories.py` | `create_transport(config)` / `create_engine(config)`. The only module that knows every implementation by name — which is exactly why it sits **outside** `core/`. |
 | `core/transport.py` | The vendor-neutral contracts: `CallSession` (one call) and `BaseTransport` (one vendor connection), plus the canonical audio-format constants. |
 | `core/engine.py` | The engine-neutral contract: `Engine.run(session)` drives one call's conversation. Mentions no pipelines, frames or processors — that vocabulary is Pipecat's and stops here. |
 | `transports/asterisk.py` | **The Asterisk adapter.** `AsteriskTransport` owns the listening socket + accept thread, the ARI Stasis app, and the UUID correlation. `AsteriskCallSession` is one call, with `transfer()` done the ARI way. Also covers FreePBX. |
@@ -59,13 +66,14 @@ call pipelines; each call additionally owns two OS threads for socket I/O.
 
 ### The main loop
 ```python
-transport = transport_from_env()             # Phase 4: create_transport(config)
+config = load_config()                            # validated BEFORE anything listens
+transport = create_transport(config)
 await transport.start()
 async for session in transport.listen():
-    asyncio.create_task(run_call(session))   # a TASK, so calls run in parallel
+    asyncio.create_task(run_call(config, session))  # a TASK, so calls run in parallel
 
-async def run_call(session):
-    engine = create_engine()                 # Phase 4: create_engine(config)
+async def run_call(config, session):
+    engine = create_engine(config)                # one engine per call
     try:
         await engine.run(session)
     finally:
@@ -233,7 +241,8 @@ transport.output()                PCM out to the write thread
 aggregators.assistant()           records what the agent said
 ```
 
-Services and settings (all **hardcoded today** — Phase 4 moves them to config):
+Services and settings, **all from `config.yaml`** (the values below are the
+shipped defaults, which reproduce the original hardcoded behaviour exactly):
 
 * **STT** Deepgram, 8 kHz native.
 * **LLM** Google Gemini `gemini-flash-lite-latest` (~700 ms measured; see
@@ -304,25 +313,30 @@ Transfer is a **call-control** operation, not a pipeline operation.
 
 ---
 
-## Configuration today (pre-Phase-4)
+## Configuration
 
-Everything is either an env var or a hardcoded constant — **there is no config
-file yet**, and prompt/voice/model changes require editing `bot.py`.
+`config.yaml` decides **what** runs; the code decides **how**. Changing the
+telephony vendor, an STT/LLM/TTS provider, the model, the voice, the persona or
+the turn-taking timing needs no code edit. Full key reference in [[runbook]].
 
-| Env var | Default | Notes |
-|---|---|---|
-| `DEEPGRAM_API_KEY` | — | required; STT **and** TTS |
-| `GEMINI_API_KEY` | — | required |
-| `AUDIOSOCKET_HOST` | `0.0.0.0` | listening address |
-| `AUDIOSOCKET_PORT` | `8090` | also given to ARI as the media port |
-| `ARI_BASE_URL` | `http://localhost:8088` | |
-| `ARI_APP` | `voiceagent` | Stasis app name |
-| `ARI_USER` | `voiceagent` | matches `ari.conf` |
-| `ARI_PASSWORD` | — | **ARI is enabled only if this is set** |
-| `TRANSFER_CONTEXT` | `transfer` | dialplan context for transfers |
+The split is strict:
 
-`check_keys()` fails fast at startup on missing Deepgram/Gemini keys. Missing
-`ARI_PASSWORD` is not fatal — it silently degrades to Path A (no transfer).
+* **`config.yaml`** — everything that is not a secret. It refers to secrets by
+  the **name** of an environment variable (`api_key_env: DEEPGRAM_API_KEY`), so
+  the file is safe to commit, diff and paste.
+* **`.env`** — the secrets themselves, git-ignored. Only four:
+  `DEEPGRAM_API_KEY`, `GEMINI_API_KEY`, `ARI_USER`, `ARI_PASSWORD`.
+
+Everything is validated at **startup**, before a single call is accepted:
+unknown keys, missing required keys, unsupported providers, out-of-range VAD
+timeouts, unreadable prompt files, and missing environment variables — all
+reported with the exact dotted path.
+
+Two behaviour changes came with this:
+* Settings that used to be env vars (`AUDIOSOCKET_*`, `ARI_BASE_URL`, `ARI_APP`,
+  `TRANSFER_CONTEXT`) now live **only** in `config.yaml`.
+* Missing ARI credentials are now a **startup failure**, not a silent downgrade
+  to "no transfer". To run without call control, comment out `ari_pass_env`.
 
 ---
 
