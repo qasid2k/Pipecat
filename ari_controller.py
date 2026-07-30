@@ -17,6 +17,7 @@ a reusable class and pointed at the real pipeline instead of an echo server.
 If ARI isn't configured (no ARI_PASSWORD) or unreachable, bot.py still runs the
 direct-AudioSocket path (extension 6000) -- call control is simply disabled.
 """
+import asyncio
 import base64
 import json
 import uuid
@@ -24,6 +25,11 @@ from dataclasses import dataclass
 
 import aiohttp
 from loguru import logger
+
+# How long to wait for our external-media channel to enter the Stasis app before
+# giving up and trying to bridge it anyway. It normally arrives in a few
+# milliseconds; this is a safety net, not a delay we expect to spend.
+EM_STASIS_TIMEOUT_S = 2.0
 
 
 @dataclass
@@ -54,15 +60,35 @@ class AriController:
         self.registry: dict[str, AriCall] = {}
         self._em_ids: set[str] = set()  # our own media channels, to skip
 
+        # em-channel-id -> Event, set when THAT channel's own StasisStart
+        # arrives. externalMedia returns before the channel has entered Stasis,
+        # so we must wait for this before adding it to a bridge (see B-010).
+        self._em_ready: dict[str, asyncio.Event] = {}
+        # Caller channels whose StasisEnd arrived while their setup was still in
+        # flight -- i.e. the caller hung up mid-setup. Their setup task cleans up
+        # when it finishes, because _on_stasis_end found nothing to clean yet.
+        self._ended_early: set[str] = set()
+        # Strong refs to in-flight handler tasks; without these CPython may
+        # garbage-collect a running task.
+        self._tasks: set[asyncio.Task] = set()
+
     # -- REST helpers ------------------------------------------------------
     async def _req(self, method, path, **params):
+        """Returns the parsed JSON body, or True when a call succeeded with no
+        body, or **None on failure**.
+
+        The True matters: many ARI commands answer 204 No Content (addChannel,
+        answer, hangup, continue). Returning None for those too would make
+        "worked fine" indistinguishable from "failed", and any caller that
+        checked the result would treat every success as an error.
+        """
         url = f"{self._base}/ari{path}"
         async with self._session.request(method, url, params=params) as r:
             body = await r.text()
             if r.status >= 400:
                 logger.error(f"ARI {method} {path} -> {r.status}: {body}")
                 return None
-            return json.loads(body) if body else None
+            return json.loads(body) if body else True
 
     async def answer(self, cid):
         return await self._req("POST", f"/channels/{cid}/answer")
@@ -109,20 +135,20 @@ class AriController:
         chan = event["channel"]
         cid = chan["id"]
 
-        # Our own external-media channel also enters Stasis -- ignore it.
-        if cid in self._em_ids:
-            return
-
         caller = chan.get("caller", {}).get("number") or "?"
         logger.info(f"ARI: call in {cid} ({chan.get('name')}) from {caller}")
 
         au = str(uuid.uuid4())
         em_id = "em-" + uuid.uuid4().hex
         self._em_ids.add(em_id)
+        # Create the gate BEFORE the channel exists, so its StasisStart can never
+        # arrive before we are ready to notice it.
+        self._em_ready[em_id] = asyncio.Event()
 
         await self.answer(cid)
         bridge = await self._create_bridge()
         if not bridge:
+            self._forget_em(em_id)
             return
         bid = bridge["id"]
         await self._add(bid, cid)
@@ -142,20 +168,145 @@ class AriController:
         if not em:
             logger.error("ARI: external media creation failed -- call cannot get audio")
             self.registry.pop(au, None)
+            self._forget_em(em_id)
             return
-        await self._add(bid, em_id)
+
+        # B-010: externalMedia returns as soon as the channel is CREATED, but
+        # addChannel requires it to have ENTERED Stasis -- which happens a moment
+        # later and is announced by its own StasisStart. Adding it immediately
+        # races that, and losing the race means 422 and a call with no audio path
+        # at all. So wait for the event rather than hoping.
+        if not await self._wait_for_em_stasis(em_id):
+            logger.warning(
+                f"ARI: media channel {em_id} did not enter Stasis within "
+                f"{EM_STASIS_TIMEOUT_S}s -- adding it anyway as a last resort"
+            )
+
+        # The caller can hang up while we wait, in which case _on_stasis_end has
+        # already torn this call down. Bridging into a destroyed bridge would
+        # just log a confusing failure, so stop here.
+        if au not in self.registry:
+            logger.info(f"ARI: {cid} went away during setup; abandoning bridging")
+            self._release_gate(em_id)
+            return
+
+        # Check the result. This used to be ignored while the next line logged
+        # success unconditionally, so a failure here looked like a healthy call.
+        if await self._add(bid, em_id) is None:
+            logger.error(
+                f"ARI: could not add media channel {em_id} to bridge {bid} -- "
+                f"call {cid} has NO audio path. Tearing it down instead of "
+                "leaving the caller in silence."
+            )
+            await self.hangup(em_id)
+            await self._destroy_bridge(bid)
+            self.registry.pop(au, None)
+            self._forget_em(em_id)
+            return
+
         logger.info(f"ARI: {cid} bridged into the AI pipeline (uuid={au})")
 
-    async def _on_stasis_end(self, event):
-        cid = event["channel"]["id"]
-        call = next((c for c in self.registry.values() if c.channel_id == cid), None)
-        if not call:
-            return
-        logger.info(f"ARI: call {cid} ended; cleaning up bridge {call.bridge_id}")
+        # The caller may have hung up while we were setting all this up. In that
+        # case _on_stasis_end ran before the registry entry existed and found
+        # nothing to clean, so it is our job now.
+        if cid in self._ended_early:
+            self._ended_early.discard(cid)
+            logger.info(f"ARI: {cid} hung up during setup; cleaning up immediately")
+            await self._teardown(self.registry[au])
+
+    async def _wait_for_em_stasis(self, em_id: str) -> bool:
+        """Wait for our external-media channel's own StasisStart. True if it came.
+
+        NOTE: this only works because StasisStart handling is dispatched as a
+        task (see run()). If handlers ran inline on the WebSocket read loop, the
+        event we are waiting for could never be read and this would deadlock for
+        the full timeout, every call.
+        """
+        gate = self._em_ready.get(em_id)
+        if gate is None:
+            return False
+        try:
+            await asyncio.wait_for(gate.wait(), timeout=EM_STASIS_TIMEOUT_S)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    def _forget_em(self, em_id: str):
+        """Forget a media channel that was NEVER CREATED, so no events can come.
+
+        Only safe on the failure paths before/at externalMedia. Once the channel
+        exists, its id must stay in _em_ids until its StasisEnd -- see
+        _release_gate.
+        """
+        self._em_ids.discard(em_id)
+        self._em_ready.pop(em_id, None)
+
+    def _release_gate(self, em_id: str):
+        """Drop the StasisStart gate, but KEEP the id in _em_ids.
+
+        Deliberate: a media channel's StasisStart may still be in flight when we
+        tear down (the caller can hang up mid-setup). If we forgot the id here,
+        that pending event would no longer be recognised as ours and would be
+        handled as a NEW INCOMING CALL -- answering our own media channel and
+        building a phantom bridge for it. The id is retired in _on_stasis_end,
+        which is that channel's genuinely final event.
+        """
+        self._em_ready.pop(em_id, None)
+
+    async def _teardown(self, call: AriCall):
+        logger.info(f"ARI: call {call.channel_id} ended; cleaning up bridge {call.bridge_id}")
         await self.hangup(call.em_id)
         await self._destroy_bridge(call.bridge_id)
         self.registry.pop(call.audiosocket_uuid, None)
-        self._em_ids.discard(call.em_id)
+        self._release_gate(call.em_id)
+
+    async def _on_stasis_end(self, event):
+        cid = event["channel"]["id"]
+        # Our own media channels end too. Nothing to clean up, but THIS is where
+        # we retire the id: it is the channel's final event, so no later event
+        # can be misread as an incoming call (see _release_gate).
+        if cid in self._em_ids:
+            self._em_ids.discard(cid)
+            self._em_ready.pop(cid, None)
+            return
+        call = next((c for c in self.registry.values() if c.channel_id == cid), None)
+        if not call:
+            # Either not ours, or the caller hung up before setup finished. Note
+            # it so the setup task can clean up when it completes.
+            self._ended_early.add(cid)
+            return
+        await self._teardown(call)
+
+    # -- event dispatch ----------------------------------------------------
+    def _spawn(self, coro):
+        """Run a handler as a task, so the WebSocket read loop keeps draining.
+
+        This is load-bearing, not tidiness: call setup has to WAIT for another
+        ARI event (the media channel's StasisStart). Handled inline, that event
+        could never be read, because the read loop would be blocked inside the
+        handler waiting for it -- a guaranteed deadlock.
+        """
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    def _dispatch(self, event):
+        etype = event.get("type")
+        cid = event.get("channel", {}).get("id")
+
+        if etype == "StasisStart":
+            # Our OWN external-media channel enters Stasis too (B-009), and must
+            # never be mistaken for an incoming call. Handle it inline: all it
+            # does is open the gate that a setup task is waiting on, so there is
+            # nothing to await and no reason to delay it by a scheduling hop.
+            if cid in self._em_ids:
+                gate = self._em_ready.get(cid)
+                if gate:
+                    gate.set()
+                return
+            self._spawn(self._on_stasis_start(event))
+        elif etype == "StasisEnd":
+            self._spawn(self._on_stasis_end(event))
 
     # -- main loop ---------------------------------------------------------
     async def run(self):
@@ -174,12 +325,7 @@ class AriController:
                 logger.info(f"ARI call control ENABLED (app '{self._app}')")
                 async for msg in ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        event = json.loads(msg.data)
-                        etype = event.get("type")
-                        if etype == "StasisStart":
-                            await self._on_stasis_start(event)
-                        elif etype == "StasisEnd":
-                            await self._on_stasis_end(event)
+                        self._dispatch(json.loads(msg.data))
                     elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                         logger.warning("ARI WebSocket closed.")
                         break
@@ -191,5 +337,8 @@ class AriController:
         except Exception as e:  # noqa: BLE001
             logger.exception(f"ARI controller crashed: {e}")
         finally:
+            # Handler tasks outlive the read loop; don't leave them dangling.
+            for task in list(self._tasks):
+                task.cancel()
             if self._session:
                 await self._session.close()

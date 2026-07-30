@@ -5,6 +5,28 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-07-30 — Fix: the ARI addChannel race ([[bugs]] B-010)
+Phase 2 passed its live checkpoint (conversation, transfer, the "no one
+available" path and two concurrent calls all confirmed on real phones), then this
+pre-existing race was fixed on top. See [[decisions]] 017.
+
+* Setup now waits for the media channel's own `StasisStart` before bridging it,
+  instead of racing it. 2 s timeout as a safety net.
+* ARI event handlers are dispatched as **tasks** — mandatory, or waiting for that
+  event deadlocks the WebSocket read loop.
+* `_add()`'s result is checked; a real failure tears the call down loudly instead
+  of logging "bridged into the AI pipeline" over the top of it.
+* `_req()` now distinguishes success-with-no-body (`True`) from failure (`None`).
+  Without this the new check would have treated **every** `204 No Content`
+  success as a failure and torn down every call.
+* Fixed a phantom-call bug that the added concurrency exposed: a caller hanging
+  up mid-setup caused our own media channel to be answered as a new incoming
+  call. Media-channel ids now retire on `StasisEnd`, not at teardown.
+* 28/28 event-ordering checks, plus the Phase 2 suite still at 26/26.
+* **Needs one more live call to confirm.**
+
+---
+
 ## 2026-07-30 — Phase 2: transport interface + Asterisk adapter
 **Structural only — no behaviour change intended.** See [[decisions]] 013–016.
 

@@ -306,3 +306,33 @@ pipeline through it.
 STT/LLM/TTS. The mechanics underneath are unchanged: same queues, same threads,
 same bounded-put back-pressure. These classes are no longer Asterisk-specific and
 move next to the engine in Phase 3.
+
+---
+
+## 017 — ARI event handlers run as tasks, not inline on the WebSocket loop
+*Date: 2026-07-30 (fixing [[bugs]] B-010)*
+
+**Decision.** `_dispatch` spawns `_on_stasis_start` / `_on_stasis_end` as tasks.
+The one exception is our own media channel's `StasisStart`, handled inline
+because it only opens a gate and has nothing to await.
+
+**Why.** Call setup has to *wait for another ARI event* — the media channel's
+`StasisStart` — before it can bridge that channel. Handled inline, the loop would
+be blocked inside the handler waiting for an event only that same loop could
+read: a guaranteed deadlock on every call. Concurrency here is a requirement, not
+an optimisation.
+
+**Consequences, and they are not free.** Handlers can now interleave, which the
+old serialized code never allowed. That immediately produced a new failure mode
+(the phantom-call bug, B-010(b)): teardown during setup discarded the media
+channel id, and its in-flight `StasisStart` was then treated as a new incoming
+call. Two rules now hold and must not be quietly undone:
+* An id stays in `_em_ids` until the channel's **final** event (`StasisEnd`).
+  Never retire it while an event could still be in flight.
+* Setup re-checks that its registry entry still exists after any await, because
+  the caller may have hung up meanwhile.
+
+A per-call lock would be the heavier alternative; it is not needed as long as
+those two rules hold, and both are covered by regression checks. Setup for
+simultaneous calls is now genuinely parallel rather than serialized, which is a
+small side benefit.

@@ -147,10 +147,10 @@ raises `StasisStart`, so the handler saw it as an incoming caller.
 
 ---
 
-## B-010 — `addChannel` 422 "Channel not in Stasis application" ⚠️ OPEN
-**Status: observed 2026-07-30, NOT yet fixed.** Intermittent and usually
-harmless; the call it was first seen on worked fine (greeting, conversation,
-transfer and the two-concurrent-call test all passed).
+## B-010 — `addChannel` 422 "Channel not in Stasis application" ✅ FIXED
+**Observed 2026-07-30, fixed the same day.** Intermittent; the call it was first
+seen on worked fine (greeting, conversation, transfer and the two-concurrent-call
+test all passed), so it was a latent fault rather than a live outage.
 
 **Symptom.**
 ```
@@ -181,15 +181,50 @@ success message.
 `519cd29`: the only change to `ari_controller.py` was the new `caller_id` field.
 The sequence of ARI calls is byte-identical.
 
-**Planned fix.** Wait for the EM channel's own `StasisStart` before adding it to
-the bridge, instead of assuming it has arrived. `_em_ids` is already tracked; the
-early `return` currently throws that event away, and it can set an
-`asyncio.Event` instead. Also check `_add()`'s result so the success line stops
-lying.
+**Fix.** Wait for the EM channel's own `StasisStart` before bridging it. Its
+event used to be discarded by an early `return`; it now opens an
+`asyncio.Event` gate (`_em_ready[em_id]`) that setup awaits, with a 2 s
+`EM_STASIS_TIMEOUT_S` safety net. `_add()`'s result is now checked, and on real
+failure the call is torn down with a loud error instead of being reported as
+healthy.
 
-> **Trap to design around:** you cannot simply `await` that event inside
-> `_on_stasis_start`. The ARI WebSocket loop handles messages one at a time
+> **Trap:** you cannot `await` that gate inside `_on_stasis_start` as it was
+> written. The ARI WebSocket loop handled messages one at a time
 > (`await self._on_stasis_start(event)`), so blocking there means the EM
-> channel's `StasisStart` can never be read — it deadlocks for the whole
-> timeout. The handler must be dispatched as a task so the read loop keeps
-> draining events.
+> channel's `StasisStart` can never be read — a guaranteed deadlock for the full
+> timeout, on every call. Handlers are therefore dispatched as tasks
+> (`_dispatch`/`_spawn`), while the EM `StasisStart` is handled inline because
+> all it does is open the gate.
+
+### Three further bugs this fix flushed out
+
+**(a) `_req()` returned `None` for both failure and success-with-no-body.**
+`addChannel`, `answer`, `hangup` and `continue` all answer `204 No Content`, so
+the new "did the add work?" check would have treated **every successful call as a
+failure** and torn down every call. `_req` now returns `True` for a 2xx with an
+empty body, and `None` only on failure. Any future code that checks an ARI result
+depends on this distinction.
+
+**(b) Phantom calls from our own media channel.** Making handlers concurrent
+opened a window the old serialized code could not hit: if the caller hangs up
+*during* setup, teardown ran and discarded the EM id — and then that channel's
+still-in-flight `StasisStart` was no longer recognised as ours, so it was handled
+as a **new incoming call**: answering our own media channel, building a second
+bridge and creating yet another media channel for it. Fix: teardown drops only
+the gate (`_release_gate`); the id is retired in `_on_stasis_end`, which is the
+channel's genuinely final event. `_forget_em` is now reserved for channels that
+were never created, where no events can follow.
+
+**(c) Pointless bridging after teardown.** After the gate wait, setup now checks
+that its registry entry still exists and abandons bridging if the call went away.
+
+Known, accepted edge case: a media channel that is created but never enters
+Stasis leaves one short id string in `_em_ids` for the process lifetime, because
+no `StasisEnd` ever arrives to retire it. Bounded and tiny; preferable to
+re-opening the phantom-call window.
+
+**Verified** with an event-ordering harness (fake ARI events + stubbed REST):
+28/28 checks — including delayed `StasisStart`, a genuinely failing add, the
+never-enters-Stasis timeout, hangup-during-setup with no phantom call and no
+orphaned bridge, and two concurrent setups not crossing caller ids or media
+channels.
