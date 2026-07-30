@@ -1,21 +1,12 @@
-"""
-The AudioSocket bridge: the protocol + threaded socket I/O, plus the Pipecat
-transport that feeds a pipeline from a CallSession.
+﻿"""
+The AudioSocket protocol and its threaded socket I/O.
 
-Pipecat ships transports for WebRTC/WebSockets -- none speak AudioSocket, so we
-write ours. The AudioSocket protocol parsing is the same you wrote in Phase 1.
+Asterisk-specific and engine-agnostic: this module imports no Pipecat and knows
+nothing about conversations. It is the plumbing underneath
+`transports/asterisk.py`, which wraps it in a `CallSession`.
 
-TWO HALVES, ONE FILE (for now):
-  * AudioSocketConnection      -- Asterisk-specific: the socket, the protocol,
-                                  the two I/O threads. Used by
-                                  transports/asterisk.py.
-  * AudioSocket*Transport      -- Pipecat glue. As of the modular refactor these
-                                  read and write through a **CallSession**, not
-                                  the raw connection, so they are no longer
-                                  Asterisk-specific at all: any transport that
-                                  implements CallSession can drive a Pipecat
-                                  pipeline through them. Phase 3 moves this half
-                                  next to the engine, where it belongs.
+(The Pipecat glue that used to live here moved to `engine/session_transport.py`
+in Phase 3, once it turned out to be engine code rather than transport code.)
 
 WHY THREADS (the hard lesson): Asterisk's AudioSocket does non-blocking writes
 with ZERO tolerance -- if it can't hand us a frame the instant it's ready, it
@@ -46,18 +37,12 @@ import time
 import uuid
 
 from loguru import logger
-from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame
-from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.transports.base_input import BaseInputTransport
-from pipecat.transports.base_output import BaseOutputTransport
-from pipecat.transports.base_transport import BaseTransport, TransportParams
 
 from core.transport import (
     CANONICAL_CHANNELS,
     CANONICAL_FRAME_BYTES,
     CANONICAL_FRAME_MS,
     CANONICAL_SAMPLE_RATE,
-    CallSession,
 )
 
 # ---------------------------------------------------------------------------
@@ -283,91 +268,3 @@ class AudioSocketConnection:
         except queue.Empty:
             pass
 
-
-class AudioSocketInputTransport(BaseInputTransport):
-    """Feeds caller audio from a CallSession into the pipeline.
-
-    Note it takes a **CallSession**, not an AudioSocketConnection: the pipeline
-    side no longer knows which vendor the audio came from.
-    """
-
-    def __init__(self, session: CallSession, params: TransportParams, **kwargs):
-        super().__init__(params, **kwargs)
-        self._session = session
-        self._pump_task = None
-
-    async def start(self, frame: StartFrame):
-        await super().start(frame)
-        if not self._pump_task:
-            self._pump_task = asyncio.create_task(self._pump_loop())
-        await self.set_transport_ready(frame)
-
-    async def _pump_loop(self):
-        while True:
-            payload = await self._session.read_audio()
-            if payload is None:  # sentinel: call ended
-                break
-            await self.push_audio_frame(
-                InputAudioRawFrame(
-                    audio=payload, sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS
-                )
-            )
-
-    async def cleanup(self):
-        await super().cleanup()
-        if self._pump_task:
-            self._pump_task.cancel()
-            try:
-                await self._pump_task
-            except asyncio.CancelledError:
-                pass
-            self._pump_task = None
-
-
-class AudioSocketOutputTransport(BaseOutputTransport):
-    """Hands the agent's audio to the CallSession, which paces + sends it."""
-
-    def __init__(self, session: CallSession, params: TransportParams, **kwargs):
-        super().__init__(params, **kwargs)
-        self._session = session
-
-    async def start(self, frame: StartFrame):
-        await super().start(frame)
-        await self.set_transport_ready(frame)
-
-    async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
-        # write_audio() blocks (asynchronously) until the vendor is ready for
-        # more -- for Asterisk, until real playback catches up. That
-        # back-pressure is what paces the agent's speech and keeps Pipecat's
-        # bot-speaking timing honest, so do NOT make this fire-and-forget.
-        await self._session.write_audio(frame.audio)
-        return True
-
-
-class AudioSocketTransport(BaseTransport):
-    """Bundles the input and output halves for one phone call."""
-
-    def __init__(self, session: CallSession, params: TransportParams | None = None, **kwargs):
-        super().__init__(**kwargs)
-        self._session = session
-        self._params = params or TransportParams(
-            audio_in_enabled=True,
-            audio_in_sample_rate=SAMPLE_RATE,
-            audio_in_channels=NUM_CHANNELS,
-            audio_out_enabled=True,
-            audio_out_sample_rate=SAMPLE_RATE,
-            audio_out_channels=NUM_CHANNELS,
-            audio_out_10ms_chunks=2,  # 20ms writes, matching AudioSocket frames
-        )
-        self._input = None
-        self._output = None
-
-    def input(self) -> FrameProcessor:
-        if not self._input:
-            self._input = AudioSocketInputTransport(self._session, self._params)
-        return self._input
-
-    def output(self) -> FrameProcessor:
-        if not self._output:
-            self._output = AudioSocketOutputTransport(self._session, self._params)
-        return self._output

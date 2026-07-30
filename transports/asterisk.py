@@ -60,8 +60,8 @@ from typing import AsyncIterator
 from loguru import logger
 
 from ari_controller import AriCall, AriController
-from audiosocket_transport import RECV_BUFFER_BYTES, AudioSocketConnection
 from core.transport import BaseTransport, CallSession
+from transports.audiosocket import RECV_BUFFER_BYTES, AudioSocketConnection
 
 # How long to wait for the AudioSocket UUID before deciding this is a direct
 # (non-ARI) call. The UUID is the FIRST message Asterisk sends, so this is

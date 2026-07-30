@@ -5,6 +5,35 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-07-30 — Phase 3: Pipecat isolated behind our own Engine interface
+**Structural only — no behaviour change intended.** See [[decisions]] 018–020.
+
+* New `core/engine.py`: the `Engine` contract, one method, `run(session)`.
+* New `engine/` package — **everything that imports Pipecat now lives here**:
+  * `pipecat_engine.py` — `PipecatEngine`: the persona prompt, the STT→LLM→TTS
+    pipeline (Deepgram / `gemini-flash-lite-latest` / `aura-2-helena-en`), the
+    Silero VAD + 0.6 s stop strategy, the `transfer_to_department` tool, and the
+    per-call lifecycle.
+  * `session_transport.py` — the Pipecat glue, moved out of the AudioSocket
+    module and renamed `CallSession{Input,Output,}Transport`. It was never
+    really Asterisk-specific.
+  * `transcripts.py` — `TranscriptRecorder` + `save_conversation`.
+* `audiosocket_transport.py` → **`transports/audiosocket.py`** (`git mv`, history
+  preserved), now just the protocol and its I/O threads.
+* `bot.py` is down to ~90 lines of wiring: build a transport, build an engine,
+  run calls, guarantee cleanup. It imports no Pipecat and opens no socket.
+* **`run_call` owns the session, not the engine** — `hangup()` happens in a
+  `finally` so it is guaranteed on every path, including an engine crash, and no
+  future engine has to remember it.
+* Two invariants are now machine-checked: nothing outside `engine/` imports
+  Pipecat, and `core/` imports only `abc`, `typing`, `asyncio`.
+* Values are still hardcoded in the engine — Phase 4 moves them to config.yaml.
+* 19/19 Phase 3 checks; Phase 2 (26/26) and B-010 (28/28) suites still green.
+  Pipeline stages and the transfer tool verified unchanged.
+* **Needs a live call to confirm.**
+
+---
+
 ## 2026-07-30 — Fix: the ARI addChannel race ([[bugs]] B-010)
 Phase 2 passed its live checkpoint (conversation, transfer, the "no one
 available" path and two concurrent calls all confirmed on real phones), then this

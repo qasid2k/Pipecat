@@ -48,9 +48,23 @@ commit real keys.** (`.gitignore` also excludes `.venv/`, `__pycache__/`,
 missing `ARI_PASSWORD` is **not** an error — the bot silently runs without call
 control, so transfer stops working. If transfer "just stopped", check this first.
 
-Not yet in the environment (must be edited in `bot.py` until Phase 4):
-persona/prompt, greeting, agent name, company name, LLM model, TTS voice, VAD
-timeout, department list.
+Not yet in the environment (must be edited in `engine/pipecat_engine.py` until
+Phase 4): persona/prompt, greeting, agent name, company name, LLM model, TTS
+voice, VAD timeout, department list, the 3 s transfer announcement delay and the
+30 s idle timeout.
+
+### Where things live
+```
+core/transport.py          CallSession + BaseTransport contracts
+core/engine.py             Engine contract
+transports/asterisk.py     Asterisk/FreePBX: ARI, bridge, correlation, transfer
+transports/audiosocket.py  AudioSocket protocol + I/O threads
+ari_controller.py          ARI REST/WebSocket client
+engine/pipecat_engine.py   persona, pipeline, tools  <- most edits land here
+engine/session_transport.py  CallSession -> Pipecat glue
+engine/transcripts.py      transcript recording
+bot.py                     wiring only
+```
 
 ---
 
@@ -160,8 +174,9 @@ Pipecat already abstracts providers, so we add **no** wrapper classes of our own
 ([[decisions]] 009).
 1. Install the extra: `pipecat-ai[<provider>]` — and add it to the pin in
    `requirements.txt`.
-2. Today: change the one line in `build_pipeline()` (`bot.py:263`).
-   From Phase 4: change `engine.stt/llm/tts` in `config.yaml`.
+2. Today: change the one line in `PipecatEngine._build_pipeline()`
+   (`engine/pipecat_engine.py`). From Phase 4: change `engine.stt/llm/tts` in
+   `config.yaml`.
 3. Put the key in `.env` and reference it from config by **name**
    (`api_key_env:`), never by value ([[decisions]] 011).
 4. **Confirm the provider accepts 8 kHz.** If it does not, we would have to
@@ -189,14 +204,24 @@ are documented in `core/transport.py`.
 7. Leave the Asterisk path untouched, and re-run §5 against Asterisk to prove it.
 
 ### Change the persona
-Today: edit the `SYSTEM_PROMPT` block at `bot.py:87`. From Phase 4:
-`engine.persona.system_prompt_file`. Keep the phone-specific rules — no markdown,
-one or two sentences, spoken numbers, one question at a time — they are what make
-it bearable to listen to.
+Today: edit the `SYSTEM_PROMPT` block in `engine/pipecat_engine.py`. From
+Phase 4: `engine.persona.system_prompt_file`. Keep the phone-specific rules — no
+markdown, one or two sentences, spoken numbers, one question at a time — they are
+what make it bearable to listen to.
+
+### Swap the conversation engine entirely (replacing Pipecat)
+1. Add a module under `engine/` implementing `core.engine.Engine` — one method,
+   `async run(session)`.
+2. Drive audio with `session.read_audio()` / `session.write_audio()`, and
+   transfer with `session.transfer(dept)`.
+3. **Do not call `session.hangup()`** — `bot.run_call` owns that
+   ([[decisions]] 019).
+4. Point `create_engine()` at it. Nothing else in the codebase changes; that is
+   the whole point of the interface.
 
 ### Add a transfer department
-1. Add the name to `TRANSFER_DEPARTMENTS` (`bot.py:143`) — it feeds both the tool
-   enum and the validation.
+1. Add the name to `TRANSFER_DEPARTMENTS` in `engine/pipecat_engine.py` — it
+   feeds both the tool enum and the validation.
 2. Describe it in the tool's `department` description so the LLM can choose it.
 3. **Add the matching `<name>,1,...` entry to the `[transfer]` dialplan context**,
    including its `DIALSTATUS` branch. Skipping this is a silent failure.

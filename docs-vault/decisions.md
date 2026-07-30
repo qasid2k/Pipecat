@@ -336,3 +336,64 @@ A per-call lock would be the heavier alternative; it is not needed as long as
 those two rules hold, and both are covered by regression checks. Setup for
 simultaneous calls is now genuinely parallel rather than serialized, which is a
 small side benefit.
+
+---
+
+## 018 — The Engine contract is one method: `run(session)`
+*Date: 2026-07-30 (Phase 3)*
+
+**Decision.** `core/engine.py` defines `Engine` with a single abstract method,
+`async run(session) -> None`, which talks to the caller until the call ends.
+`PipecatEngine` implements it. See 009 for *why* Pipecat is wrapped at all.
+
+**Why so small.** The interface exists to make one specific swap possible —
+replacing Pipecat — and nothing else. Anything richer (turn events, hooks,
+barge-in callbacks) would be inventing requirements we do not have, and every
+one of them would leak Pipecat's model of a conversation into the contract,
+defeating the purpose. Note what the file does not mention: pipelines, frames,
+processors, aggregators, VAD.
+
+**Consequences.** Enforced by two machine checks: nothing outside `engine/`
+imports Pipecat, and `core/` imports only `abc`, `typing` and `asyncio`.
+`bot.py` fell to ~90 lines of wiring. Swapping Pipecat = one new module in
+`engine/` and a changed line in `create_engine()`.
+
+---
+
+## 019 — The caller of `run()` owns the session, not the engine
+*Date: 2026-07-30 (Phase 3)*
+
+**Decision.** `Engine.run()` must never call `session.hangup()`. `bot.run_call`
+does it in a `finally`.
+
+**Why.** Cleanup-on-every-path is easy to get wrong once per implementation, and
+every future engine would have to remember it — including on the exception path.
+Putting it in the caller means it is written once and cannot be forgotten. It
+also keeps the ownership rule honest: whoever *acquired* the resource releases
+it, and the engine never acquired it.
+
+**Consequences.** `run()` must return rather than raise for an ordinary call
+ending, which is now stated in its docstring. `run_call` also catches engine
+exceptions so one failed call cannot kill the accept loop. Covered by checks that
+`hangup` is called exactly once on both the normal and the crash path, and that
+`pipecat_engine.py` contains no `hangup` call at all.
+
+---
+
+## 020 — Files moved to match the layering
+*Date: 2026-07-30 (Phase 3)*
+
+**Decision.** `audiosocket_transport.py` was split and moved:
+its `AudioSocketConnection` half → `transports/audiosocket.py`, its Pipecat glue
+→ `engine/session_transport.py` (renamed `CallSession*Transport`). The persona,
+pipeline, tool and transcript code moved from `bot.py` into `engine/`.
+
+**Why.** The old name had become a lie — after Phase 2 the file was neither
+purely AudioSocket nor purely a transport, and it was the only place where
+vendor code and Pipecat code still sat side by side. The Pipecat glue in
+particular was never really Asterisk-specific: it will drive a pipeline from any
+`CallSession`, which is exactly what Phase 5 needs for Twilio.
+
+**Consequences.** Moved with `git mv`, so history follows. One import line
+changed in the Asterisk adapter. The layout now states the architecture:
+`core/` contracts, `transports/` vendors, `engine/` conversation.

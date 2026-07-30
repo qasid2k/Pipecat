@@ -9,35 +9,48 @@ No agent pool, no queueing, no call recording of audio (transcripts only).
 
 ---
 
-## Layering (introduced in Phase 2)
+## Layering (Phases 2 and 3)
 
 ```
-        bot.py                 the conversation: persona, pipeline, tools
-           |                   talks ONLY to CallSession
-           v
-   core/transport.py           CallSession + BaseTransport contracts
-           ^                   knows nothing about any vendor
-           |
-  transports/asterisk.py       the Asterisk/FreePBX adapter
-           |
-   +-------+--------+
-   |                |
-ari_controller.py   audiosocket_transport.py
-(ARI: control)      (AudioSocket: protocol + I/O threads)
+                        bot.py
+                     (wiring only)
+                    /             \
+                   v               v
+      core/transport.py         core/engine.py
+   CallSession, BaseTransport      Engine
+   "how a call reaches us"      "what runs on it"
+           ^                          ^
+           |                          |
+  transports/asterisk.py     engine/pipecat_engine.py
+           |                          |
+   +-------+--------+          +------+---------------+
+   |                |          |                      |
+ari_controller.py  transports/  engine/session_    engine/transcripts.py
+(ARI: control)     audiosocket.py  transport.py
+                   (protocol +   (CallSession <-> Pipecat)
+                    I/O threads)
 ```
 
-The rule: **the arrows never skip the middle.** `bot.py` contains no socket, no
-ARI call and no vendor concept; the adapter contains no Pipecat import.
+Two rules, both machine-checked:
+* **Nothing outside `engine/` imports Pipecat.**
+* **`core/` imports neither side** — only `abc`, `typing`, `asyncio`.
+
+`bot.py` contains no socket, no ARI call, no vendor concept and no Pipecat
+import. The adapter imports no Pipecat; the engine imports no Asterisk.
 
 ## Components
 
 | File | Role |
 |---|---|
 | `core/transport.py` | The vendor-neutral contracts: `CallSession` (one call) and `BaseTransport` (one vendor connection), plus the canonical audio-format constants. |
+| `core/engine.py` | The engine-neutral contract: `Engine.run(session)` drives one call's conversation. Mentions no pipelines, frames or processors — that vocabulary is Pipecat's and stops here. |
 | `transports/asterisk.py` | **The Asterisk adapter.** `AsteriskTransport` owns the listening socket + accept thread, the ARI Stasis app, and the UUID correlation. `AsteriskCallSession` is one call, with `transfer()` done the ARI way. Also covers FreePBX. |
-| `bot.py` | Entry point + the conversation: persona prompt, the Pipecat pipeline, the `transfer_to_department` tool, transcripts. Vendor-agnostic. |
-| `audiosocket_transport.py` | Two halves: `AudioSocketConnection` (protocol + the two I/O threads, Asterisk-specific) and the Pipecat glue transports, which now read/write through a `CallSession` and so are vendor-neutral. Phase 3 splits them. |
+| `transports/audiosocket.py` | `AudioSocketConnection`: the AudioSocket protocol and its two I/O threads. Asterisk-specific, engine-agnostic. |
 | `ari_controller.py` | ARI/Stasis call control: answer, mixing bridge, External Media channel, UUID registry, transfer. |
+| `engine/pipecat_engine.py` | **The conversation.** `PipecatEngine`: persona prompt, the STT→LLM→TTS pipeline, the `transfer_to_department` tool, the per-call lifecycle. |
+| `engine/session_transport.py` | Bridges our `CallSession` to Pipecat's transport classes. Pipecat-specific but vendor-neutral: it will drive a pipeline from *any* `CallSession`. |
+| `engine/transcripts.py` | `TranscriptRecorder` + `save_conversation`. |
+| `bot.py` | Entry point and wiring: get a transport, get an engine, introduce them, guarantee cleanup. ~90 lines. |
 | `audiosocket_server.py` | Earlier standalone echo/test server. Superseded by `bot.py`. |
 | `ari_test.py`, `ari_media_test.py`, `nettest_*.py` | Throwaway probes used to prove ARI and the network path. Not part of the running system. |
 
@@ -46,14 +59,25 @@ call pipelines; each call additionally owns two OS threads for socket I/O.
 
 ### The main loop
 ```python
-transport = transport_from_env()          # Phase 4: from config.yaml
+transport = transport_from_env()             # Phase 4: create_transport(config)
 await transport.start()
 async for session in transport.listen():
-    asyncio.create_task(handle_call(session))   # a TASK, so calls run in parallel
+    asyncio.create_task(run_call(session))   # a TASK, so calls run in parallel
+
+async def run_call(session):
+    engine = create_engine()                 # Phase 4: create_engine(config)
+    try:
+        await engine.run(session)
+    finally:
+        await session.hangup()               # guaranteed on EVERY path
 ```
-`create_task`, not `await`: awaiting `handle_call` here would serialise calls and
-destroy concurrency. Task references are held in `_active_calls` so CPython
-cannot garbage-collect a running call.
+Two things are deliberate here:
+* `create_task`, not `await` — awaiting `run_call` would serialise calls and
+  destroy concurrency. Task references are held in `_active_calls` so CPython
+  cannot garbage-collect a running call.
+* **`run_call` owns the session's lifecycle, not the engine.** The engine never
+  calls `hangup()`; the `finally` releases the session exactly once whether the
+  conversation ended normally, the caller hung up, or the engine raised.
 
 ---
 
@@ -195,7 +219,7 @@ stalls (ONNX model load, GC, inference) were long enough to do exactly that.
 
 ## Conversation pipeline (Pipecat 1.6.0)
 
-Built per call in `build_pipeline` (`bot.py:263`):
+Built per call in `PipecatEngine._build_pipeline` (`engine/pipecat_engine.py`):
 
 ```
 transport.input()                 caller PCM in (8 kHz)
@@ -225,9 +249,9 @@ default and loads a second ONNX model per utterance. VAD already reports
 speech boundaries, so 0.6 s of silence = end of turn, no model needed.
 
 ### Per-call lifecycle
-`handle_call` (`bot.py:370`) — one connection = one call = one independent
-pipeline, each in its own `try/except`, so one call crashing cannot take down
-the others. Concurrency is therefore natural: N calls = N pipelines + 2N threads.
+`PipecatEngine.run(session)` — one call = one engine instance = one independent
+pipeline, each in its own `try/except`, so one call crashing cannot take down the
+others. Concurrency is therefore natural: N calls = N pipelines + 2N threads.
 
 * `PipelineWorker(idle_timeout_secs=30, app_resources=CallResources(...))` —
   30 s of total silence ends the call (vs the 5-minute default) so a dead test
