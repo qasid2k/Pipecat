@@ -253,12 +253,41 @@ conversation — even though the bot released the AI persona the moment it
 transferred. Left alone, a 20-minute human call blocks a slot whose agent is
 free, and the dialplan cap silently measures something different from the pool.
 
-Fix: move the channel to another group as the **first priority** of each of the
-four department extensions in `[transfer]`:
+Fix: move the channel to another group in each of the four department extensions
+in `[transfer]`, **before** the `Dial()` — `Dial()` blocks for the whole human
+conversation, so anything after it (including the shared `after-dial` handler)
+runs far too late:
 
 ```
-same => n,Set(GROUP()=transferred)
+[transfer]
+exten => sales,1,NoOp(Transfer to SALES)
+ same => n,Set(GROUP()=transferred)
+ same => n,Dial(PJSIP/101,30)
+ same => n,Goto(after-dial,1)
+
+exten => support,1,NoOp(Transfer to SUPPORT)
+ same => n,Set(GROUP()=transferred)
+ same => n,Dial(PJSIP/102,30)
+ same => n,Goto(after-dial,1)
+
+exten => billing,1,NoOp(Transfer to BILLING)
+ same => n,Set(GROUP()=transferred)
+ same => n,Dial(PJSIP/102,30)
+ same => n,Goto(after-dial,1)
+
+exten => human,1,NoOp(Transfer to OPERATOR)
+ same => n,Set(GROUP()=transferred)
+ same => n,Dial(PJSIP/102,30)
+ same => n,Goto(after-dial,1)
 ```
+
+**Any department added later needs this line too.** Miss one and that department
+leaks a slot for the length of every human call — a failure that surfaces weeks
+later as "we can only take two calls now."
+
+Note that `support`, `billing` and `human` all dial the same endpoint today, so
+routing cannot be verified by which handset rings. Check the `NoOp` line in the
+Asterisk log, or `TOOL: transfer_to_department -> billing` in the bot's.
 
 Reassigning is used rather than clearing (`Set(GROUP()=)`) because a channel holds
 one group per category, so naming a different group unambiguously removes it from
