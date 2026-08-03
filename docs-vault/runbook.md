@@ -198,6 +198,140 @@ backed up and re-test it after every refactor phase.
 FreePBX is Asterisk underneath: same ARI, same Stasis, same AudioSocket. Only the
 authoring route differs (custom contexts via the FreePBX UI). No separate adapter.
 
+### The capacity gate (dialplan side)
+
+There are **two** capacity gates and they do different jobs:
+
+| Gate | Where | Caller hears | Applies to |
+|---|---|---|---|
+| `GROUP_COUNT` cap | dialplan, before the app | a spoken busy message | Asterisk only |
+| `pool.acquire() is None` | `bot.run_call` | an immediate clean hangup | **every** transport |
+
+The **app-side gate is primary** — it is transport-agnostic and is the only gate a
+vendor without a dialplan has. The dialplan gate exists purely so the caller hears
+something civil instead of a dead line. Never delete the app-side one; it is the
+safety net for exactly the case below where the two numbers drift.
+
+Add the gate to the **6001** extension. `N` here is **3** — it must equal
+`Pool: capacity N` from the bot's startup banner:
+
+```
+exten => 6001,1,NoOp(AI agent call from ${CALLERID(num)})
+ ; Count BEFORE joining the group. Joining first would make the caller count
+ ; themselves, so the Nth caller would see N and be rejected -- an off-by-one
+ ; that silently costs one slot of real capacity.
+ same => n,GotoIf($[${GROUP_COUNT(agents)} >= 3]?busy)
+ same => n,Set(GROUP()=agents)
+ same => n,Stasis(voiceagent)              ; <-- the existing routing line
+ same => n,Hangup()
+
+ same => n(busy),NoOp(POOL FULL: ${GROUP_COUNT(agents)} of 3 agents busy)
+ same => n,Answer()
+ same => n,Wait(1)                          ; let the audio path settle
+ ; Built-in Asterisk sounds, so this works with nothing to install. To brand it,
+ ; record an 8 kHz mono file into /var/lib/asterisk/sounds/custom/ and replace
+ ; these two lines with: same => n,Playback(custom/all-agents-busy)
+ same => n,Playback(all-circuits-busy-now)
+ same => n,Playback(pls-try-call-later)
+ same => n,Hangup()
+```
+
+Confirm both sound files exist before trusting the gate — a missing file logs
+`file does not exist` and falls straight through to `Hangup()`, which is the
+silent drop this gate was added to prevent:
+
+```bash
+ls /var/lib/asterisk/sounds/en/ | grep -E 'all-circuits-busy-now|pls-try-call-later'
+```
+
+### Freeing the slot on transfer
+
+A channel's `GROUP` is released automatically when that **channel** hangs up. A
+transferred call is a problem: ARI `continue`s the *same* channel into
+`[transfer]`, so it keeps its `agents` membership for the entire human
+conversation — even though the bot released the AI persona the moment it
+transferred. Left alone, a 20-minute human call blocks a slot whose agent is
+free, and the dialplan cap silently measures something different from the pool.
+
+Fix: move the channel to another group as the **first priority** of each of the
+four department extensions in `[transfer]`:
+
+```
+same => n,Set(GROUP()=transferred)
+```
+
+Reassigning is used rather than clearing (`Set(GROUP()=)`) because a channel holds
+one group per category, so naming a different group unambiguously removes it from
+`agents` — and `GROUP_COUNT(transferred)` then tells you how many callers are with
+a human, which is worth knowing anyway.
+
+### Proving the slot is freed on every exit path
+
+Capacity that leaks is worse than capacity that is too low: it degrades silently,
+one call at a time, until the service is answering one caller. After **each** of
+the three paths below, the count must return to `0`:
+
+```bash
+asterisk -rx "group show channels"       # which channels are in which group
+asterisk -rx "dialplan show 6001@<your-context>"   # confirm the gate is live
+```
+
+| Path | How to trigger | Expected |
+|---|---|---|
+| Normal hangup | talk, then hang up | `agents` count back to 0 |
+| Transferred call | ask for billing, hang up after the human | `agents` drops to 0 **at transfer**, `transferred` drops to 0 at hangup |
+| Caller dropped | hang up mid-sentence | `agents` count back to 0 |
+
+If a count sticks above 0 with no live call, that slot is gone until Asterisk
+restarts. Cross-check against the bot's own `released ... | 3/3 free` line — if
+the bot says 3/3 free but `group show channels` still lists `agents`, the leak is
+dialplan-side, not app-side.
+
+### Keeping N in sync
+
+`N` exists in two places that **cannot** see each other:
+
+1. `pool.personas` in `config.yaml` — the app's capacity.
+2. the `>= 3` in the dialplan above — the spoken-message threshold.
+
+Change the roster and you must change the dialplan number in the same sitting.
+The failure is asymmetric, which is why it is worth care:
+
+* **dialplan cap too HIGH** — extra callers get past it, reach the app, and are
+  refused by `pool.acquire()` with a silent hangup. Symptom: `POOL FULL` lines in
+  the bot log. Annoying, not dangerous — the app-side gate holds.
+* **dialplan cap too LOW** — callers hear "all agents busy" while agents sit
+  idle. No error anywhere. This one is invisible; only the two numbers disagreeing
+  will tell you.
+
+`Pool: capacity N` is printed at every startup precisely so this is checkable in
+one glance. See also [[personas]].
+
+### Provider concurrency — check before raising N
+
+All N personas share **one** Deepgram key (STT *and* TTS) and **one** Gemini key.
+N concurrent calls therefore means N concurrent Deepgram streams plus N Gemini
+request streams. Exceed the account's limit and the provider starts rejecting
+connections — which looks exactly like a code bug: some calls answer, others die
+on connect, and nothing in this repo is at fault.
+
+**These limits have not been verified for this project's accounts.** Before
+raising N, read them off the consoles and record them here:
+
+| Provider | Limit that matters | This account's value | Checked on |
+|---|---|---|---|
+| Deepgram | concurrent streaming connections (STT + TTS share it) | _fill in_ | _date_ |
+| Gemini | requests/min and concurrent streams for the chosen model | _fill in_ | _date_ |
+
+N = 3 is far below any plausible limit, so today this is a note for later, not a
+risk. It becomes real somewhere in the tens.
+
+### Changing the roster requires a restart
+
+`config.yaml` is read once, at startup. Adding, removing or re-voicing a persona
+takes effect on the **next start** of `bot.py` — there is no live reload, and
+none is planned. Restarting drops any call in progress, so do it deliberately.
+
 ---
 
 ## 5. Verifying a call (the checkpoint test)
@@ -218,10 +352,11 @@ Run these after **every** phase — this is the regression suite:
 6. **Clean end.** The final log line reports duration, `in`/`out`/`out_real`
    frame counts, and a `CAUSE:` — which should be the caller hanging up, not an
    exception.
-7. **Capacity.** Fill all N slots, then dial once more. The extra caller is
-   refused, not answered. Log: `POOL FULL -- rejecting call from ...`.
-   *Until the Phase 4 dialplan gate exists this is a silent hangup; afterwards
-   the caller hears a spoken "all agents busy" message instead.*
+7. **Capacity.** Fill all N slots, then dial once more. With the dialplan gate
+   in place the extra caller hears the busy message and the call ends — and
+   **nothing appears in the bot log**, because that caller never reached the app.
+   A `POOL FULL -- rejecting call` line here means the dialplan cap and the
+   roster have drifted; the app-side net caught it. See §4.
 8. **Release and reuse.** Hang up, then dial again. The freed agent is handed
    out first (see [[decisions]] 029), so you should get the **same** agent — who
    must remember **nothing** of the previous call. Ask "what did I just tell

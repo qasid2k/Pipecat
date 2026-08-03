@@ -641,3 +641,79 @@ what async pool tests need, for nothing.
 
 **Consequences.** No fixtures or parametrisation; a `roster(n)` helper covers it
 at this size. Revisit if the suite grows enough that the boilerplate hurts.
+
+---
+
+## 031 — Two capacity gates, and the app-side one is primary
+*Date: 2026-07-31*
+
+**Decision.** Capacity is enforced twice: a `GROUP_COUNT` cap in the Asterisk
+dialplan that plays a spoken busy message, and `pool.acquire() is None` →
+`transport.reject()` in `run_call`. The app-side gate is the real one; the
+dialplan gate exists for the message.
+
+**Why not just the dialplan.** It is Asterisk-specific. A transport with no
+dialplan — Twilio, or anything else added later — would have no capacity control
+at all, and the pool would be the only thing standing between a fourth caller and
+an unanswered promise. Capacity is a property of the *service*, so it belongs
+where the service is.
+
+**Why not just the app.** By the time a call reaches `run_call` the only honest
+thing left is to hang up: there is no persona to speak with, and answering to say
+"we're busy" would mean building a second, agentless audio path purely to
+apologise. Asterisk can already play a file to an unanswered channel for free.
+
+**Consequences.** Two numbers must be kept equal by hand, because the dialplan
+cannot read `config.yaml`. The failure modes are asymmetric and only one is
+visible: a cap set too *high* shows up as `POOL FULL` lines in the bot log and
+costs a caller a civil message; a cap set too *low* is silent — callers are turned
+away while agents sit idle, and nothing anywhere reports it. `Pool: capacity N` is
+logged at every startup so the comparison takes one glance. Recorded in
+[[runbook]] §4 and [[personas]].
+
+---
+
+## 032 — A transferred call frees its capacity slot
+*Date: 2026-07-31*
+
+**Decision.** The `[transfer]` context reassigns the channel with
+`Set(GROUP()=transferred)` as its first priority, so a call handed to a human no
+longer counts against the `agents` cap.
+
+**Why.** ARI `continue` moves the *same channel* into the transfer context, so
+without this the channel keeps its `agents` membership for the whole human
+conversation — while the bot released the AI persona the instant it transferred.
+The two gates would then be counting different things: the pool measuring AI
+agents in use, the dialplan measuring AI-agents-plus-anyone-still-on-a-transferred
+call. A busy twenty-minute human call would block a caller from an agent that was
+free, and nothing would look wrong anywhere.
+
+**Why reassign rather than clear.** A channel holds one group per category, so
+naming a different group unambiguously removes it from `agents` — whereas relying
+on `Set(GROUP()=)` to mean "no group" is an assumption about how Asterisk treats
+an empty value, and this is not a place to be clever. `GROUP_COUNT(transferred)`
+also becomes a free measure of how many callers are with a human.
+
+**Consequences.** Four one-line additions, one per department extension, and they
+must be added to any department added later — a missed one leaks a slot for the
+length of a human call. `group show channels` is the check, and the three exit
+paths (normal, transferred, caller-dropped) are each verified in [[runbook]] §4.
+
+---
+
+## 033 — The busy message uses built-in Asterisk sounds
+*Date: 2026-07-31*
+
+**Decision.** The gate plays `all-circuits-busy-now` then `pls-try-call-later`,
+both shipped with Asterisk, rather than a custom `all-agents-busy` recording.
+
+**Why.** The obvious `Playback(all-agents-busy)` names a file that **does not
+exist** in Asterisk's core sounds. A missing file logs `file does not exist` and
+falls through to the next priority — `Hangup()` — reproducing precisely the silent
+drop this gate was added to remove, while looking correct in the dialplan. Built-in
+sounds make the gate testable the moment it is pasted in, with nothing to record,
+convert or copy to the VM.
+
+**Consequences.** The wording is generic telco phrasing, not branded. Swapping in
+a recording is one line once an 8 kHz mono file is in
+`/var/lib/asterisk/sounds/custom/`, and the line is marked as such in [[runbook]].

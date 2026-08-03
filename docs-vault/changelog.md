@@ -1,7 +1,56 @@
 # Changelog
 
 Dated, newest first. One entry per phase / notable change. Related:
-[[architecture]], [[decisions]], [[bugs]], [[runbook]].
+[[architecture]], [[decisions]], [[bugs]], [[runbook]], [[personas]].
+
+---
+
+## 2026-07-31 — Multi-agent pool, Phase 4: the dialplan capacity gate
+The (N+1)th Asterisk caller now hears a spoken busy message before ever reaching
+the app, instead of a silent hangup.
+
+* `GROUP_COUNT(agents) >= 3` on extension 6001, checked **before** joining the
+  group — joining first would make the caller count themselves and cost a slot.
+* A transferred call **frees** its slot (`Set(GROUP()=transferred)` in
+  `[transfer]`), so the dialplan measures AI agents in use — the same thing the
+  pool measures ([[decisions]] 032). Without it a long human conversation blocks
+  a caller from an agent that is free.
+* Built-in sounds, not a custom recording: `Playback(all-agents-busy)` names a
+  file that does not exist and would fall straight through to `Hangup()` —
+  the silent drop this gate exists to remove ([[decisions]] 033).
+* The app-side `pool.acquire() is None` check stays as the safety net, and as the
+  only gate for a transport with no dialplan ([[decisions]] 031).
+
+The dialplan lives **outside this repo**. The paste-ready snippet, the
+slot-release proof for all three exit paths, the N-sync rules and the provider
+concurrency caveat are in [[runbook]] §4.
+
+---
+
+## 2026-07-31 — Multi-agent pool, Phases 1–3: N personas, capacity-gated
+One agent became a roster. Any caller gets a free agent; simultaneous callers get
+different ones; a caller arriving when all N are busy is refused rather than
+answered badly.
+
+* **Phase 1** — `pool.personas` in `config.yaml`: Alex, Sarah, Daniel, each with
+  their own name, voice and prompt file. Capacity is *derived*
+  (`N = len(personas)`), never configured twice ([[decisions]] 026). A persona is
+  an override of engine settings, built through the existing `create_engine`
+  factory ([[decisions]] 027). The roster is validated at startup — empty list,
+  duplicate names, blank voice, unreadable prompt — so a misconfigured service
+  refuses to start instead of failing on a real call.
+* **Phase 2** — `core/pool.py`: `AgentPool`, pure logic, 16 tests. `acquire()`
+  returns `None` when full rather than blocking; `release()` is idempotent and
+  never raises ([[decisions]] 028). A mutation check confirms the safety tests
+  actually fail against a naive implementation.
+* **Phase 3** — the pool wired into `run_call`, and the single-agent path
+  **deleted**: one call path, no dead code. Per-call engines give isolation
+  between concurrent calls and a clean context for the next caller — a privacy
+  property, not an optimisation. 10 more tests cover release on a normal end, an
+  engine exception, an engine *construction* failure and a cancelled call.
+
+Live-verified on the VM: transfer still works, concurrent callers hear different
+agents, and no agent leaks. See [[personas]] for the roster.
 
 ---
 
