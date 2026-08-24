@@ -29,6 +29,7 @@ Secrets are never in that file -- it names environment variables, .env holds the
 
 import asyncio
 import sys
+import time
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -124,6 +125,27 @@ async def main(config: AppConfig):
     # is SUPPOSED to be global, because "who is busy" is a fact about the whole
     # service. Everything else per call is per call.
     pool = AgentPool(config.pool.personas)
+
+    # Pay the engine's import cost NOW, at startup, with nobody on the line.
+    #
+    # `create_engine` imports engine/pipecat_engine.py lazily, and that module
+    # pulls in onnxruntime (Silero VAD), google-genai/grpc and the Deepgram SDK.
+    # That import is synchronous, so it blocks the whole event loop, and cold on
+    # the VM it was observed blocking it for THIRTY-SEVEN SECONDS (see bugs.md
+    # B-011). Left until the first call, it blocks the loop *during* that call: the caller hears only the
+    # write thread's silence keep-alive, ARI's own events sit unprocessed until
+    # they time out, and by the time the loop breathes again the caller has hung
+    # up and the media channel is gone. The first caller after every restart
+    # loses their call; everyone after them is fine, which is exactly the kind
+    # of bug that survives testing.
+    #
+    # Building one throwaway engine here does the import and proves the
+    # configured engine can actually be constructed, before anything is
+    # listening. PipecatEngine.__init__ only stores config, so this opens no
+    # connection and starts no pipeline.
+    warm_start = time.monotonic()
+    create_engine_for_persona(config, config.pool.personas[0])
+    logger.info(f"Engine ready ({time.monotonic() - warm_start:.1f}s warm-up)")
 
     transport = create_transport(config)
     await transport.start()

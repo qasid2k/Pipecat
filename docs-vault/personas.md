@@ -10,11 +10,11 @@ Related: [[architecture]], [[decisions]], [[runbook]], [[changelog]].
 
 ## The roster
 
-| Name | Voice (Deepgram Aura-2) | Personality | Prompt file |
-|---|---|---|---|
-| Alex | `aura-2-helena-en` | Warm, calm, professional. Friendly but not chatty. The original single-agent persona — unchanged. | `prompts/alex.txt` |
-| Sarah | `aura-2-thalia-en` | Brisk, efficient, upbeat. Leads with the answer, adds detail only if asked. | `prompts/sarah.txt` |
-| Daniel | `aura-2-orion-en` | Easy-going, patient, reassuring. Slows down for flustered or unsure callers. | `prompts/daniel.txt` |
+| Name   | Voice (Deepgram Aura-2) | Personality                                                                                       | Prompt file          |
+| ------ | ----------------------- | ------------------------------------------------------------------------------------------------- | -------------------- |
+| Alex   | `aura-2-helena-en`      | Warm, calm, professional. Friendly but not chatty. The original single-agent persona — unchanged. | `prompts/alex.txt`   |
+| Sarah  | `aura-2-thalia-en`      | Brisk, efficient, upbeat. Leads with the answer, adds detail only if asked.                       | `prompts/sarah.txt`  |
+| Daniel | `aura-2-orion-en`       | Easy-going, patient, reassuring. Slows down for flustered or unsure callers.                      | `prompts/daniel.txt` |
 
 **N = 3.** Defined in exactly one place in the app: the length of that list.
 

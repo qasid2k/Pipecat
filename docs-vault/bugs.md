@@ -228,3 +228,65 @@ re-opening the phantom-call window.
 never-enters-Stasis timeout, hangup-during-setup with no phantom call and no
 orphaned bridge, and two concurrent setups not crossing caller ids or media
 channels.
+
+---
+
+## B-011 — First caller after every restart gets ~37 s of silence ✅ FIXED
+**Observed 2026-08-24, fixed the same day.** Reproducible, not intermittent: it
+hits the **first** call after each bot start and nothing afterwards — which is
+precisely why it survived every smoke test. Testing habitually starts the bot,
+then dials, then judges the *second* call once the first "didn't connect".
+
+**Symptom.** The caller is assigned an agent and then hears nothing at all for
+~37 s. In the log, the only lines during that window come from the AudioSocket
+**write thread**, and they say `0 real`:
+```
+20:21:42.633 [9cb001fc] assigned 'Daniel' (aura-2-orion-en) to 103 | 2/3 free
+20:21:42.909 Pipecat 1.6.0 ...                       <-- lazy import begins
+20:21:47.658 audio out: 204 frames total (0 real)    <-- write THREAD, silence only
+   ... 35 s, nothing from the event loop at all ...
+20:22:19.475 Loading Silero VAD model...             <-- loop breathes again
+20:22:19.950 ARI: media channel em-... did not enter Stasis within 2.0s
+20:22:20.550 ARI POST .../addChannel -> 400 {"message": "Channel not found"}
+20:22:20.550 ARI: ... call 1787584901.399 has NO audio path. Tearing it down
+```
+
+**Root cause.** `factories.create_engine` imports `engine/pipecat_engine.py`
+lazily, on the **first call**, from inside `run_call` — i.e. **on the event
+loop**. That module imports onnxruntime (Silero), google-genai/grpc and the
+Deepgram SDK at module level. Cold on this VM the whole chain took ~37 s, and
+being a synchronous import it blocked the loop for all of it.
+
+Everything else in the log follows from that one stall:
+
+* Only the write thread logged, because it is an OS thread ([[decisions]] 001)
+  and does not need the loop. It dutifully sent silence keep-alive — `0 real`.
+* The ARI `_wait_for_em_stasis` gate ([[bugs]] B-010) is a 2 s `wait_for`. A
+  timeout cannot fire while the loop is blocked, so a 2 s timeout reported
+  itself 37 s late. **A short timeout expiring far too late is a fingerprint of
+  a blocked event loop, not of a slow peer.**
+* By the time the loop resumed, the caller had given up and hung up, so the
+  media channel was gone — hence `400 Channel not found`, and the teardown.
+
+**Why it looked like the pool.** The failure surfaced during multi-agent testing
+and the last line before the mess reads `assigned 'Daniel'`. The pool is not
+involved: the old single-agent code called `create_engine(config)` from the same
+place and had exactly the same cold-start stall. Pooling only made it easier to
+see, because the second call visibly succeeds under a different persona.
+
+**Fix.** `bot.main()` builds one throwaway engine *before* `transport.start()`,
+so the import is paid at startup with nobody on the line, and logs
+`Engine ready (Ns warm-up)`. `PipecatEngine.__init__` only stores config, so this
+opens no connection and starts no pipeline. It doubles as a startup health check:
+an engine that cannot be constructed now fails before anything is listening.
+
+**Confirm the cost on a given machine** (cold — after a reboot, not straight
+after a run):
+```bash
+python -c "import time; t=time.monotonic(); import engine.pipecat_engine; print(f'{time.monotonic()-t:.1f}s')"
+```
+
+**Still true after the fix.** Each call's pipeline build loads its own Silero
+model (~0.4 s) on the loop. That is small, deliberate — a shared VAD across calls
+would break per-call isolation — and it scales with concurrency: N calls arriving
+together stack N × ~0.4 s of loop-blocking. Worth revisiting if N grows.
