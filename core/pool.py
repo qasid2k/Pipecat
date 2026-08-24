@@ -73,9 +73,11 @@ class AgentPool:
 
         self._all: tuple[PoolPersona, ...] = tuple(personas)
 
-        # Free personas, most-recently-released LAST -- acquire() pops from the
-        # end, so a persona that just finished a call is the next one handed out.
-        # See decisions.md 029 for why last-freed-first rather than round-robin.
+        # A QUEUE of free personas: acquire() takes from the front, release()
+        # puts back on the end. So agents rotate -- consecutive callers get
+        # different people, and every persona in the roster actually gets used.
+        # See decisions.md 034 (which supersedes 029, where taking from the end
+        # meant one agent answered nearly every call under light traffic).
         self._free: list[PoolPersona] = list(personas)
 
         # Busy personas keyed by name. A dict rather than a list because every
@@ -118,7 +120,10 @@ class AgentPool:
         async with self._lock:
             if not self._free:
                 return None
-            persona = self._free.pop()
+            # pop(0), not pop(): take the agent who has been free LONGEST.
+            # O(n) on a list, and n is the roster size -- a handful. Not worth a
+            # deque for the clarity it would cost.
+            persona = self._free.pop(0)
             self._busy[persona.name] = persona
             return persona
 

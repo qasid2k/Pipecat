@@ -149,6 +149,7 @@ Pool: capacity 3 (max simultaneous calls)
   - Alex (aura-2-helena-en)
   - Sarah (aura-2-thalia-en)
   - Daniel (aura-2-orion-en)
+Engine ready (37.2s warm-up)
 AudioSocket server listening on 0.0.0.0:8090
 Call 6000 (direct) or 6001 (via ARI/Stasis) to talk to it.
 Transcripts will be saved to .../recordings
@@ -158,6 +159,11 @@ ARI call control ENABLED (app 'voiceagent')
 **`Pool: capacity N` is the number that must match the Asterisk dialplan's
 `GROUP` cap** (Phase 4). The dialplan cannot read `config.yaml`, so these two are
 kept equal by hand — see [[personas]].
+
+**`Engine ready (Ns warm-up)` is expected to be slow** — tens of seconds on a
+cold VM. That is the Pipecat/onnxruntime/google-genai import chain, paid here on
+purpose so it cannot block the event loop during a real call ([[bugs]] B-011).
+Startup being slow is the fix, not the fault.
 
 If it exits immediately with `Configuration problem:`, read the message — it
 names the exact setting or environment variable at fault.
@@ -386,11 +392,16 @@ Run these after **every** phase — this is the regression suite:
    **nothing appears in the bot log**, because that caller never reached the app.
    A `POOL FULL -- rejecting call` line here means the dialplan cap and the
    roster have drifted; the app-side net caught it. See §4.
-8. **Release and reuse.** Hang up, then dial again. The freed agent is handed
-   out first (see [[decisions]] 029), so you should get the **same** agent — who
-   must remember **nothing** of the previous call. Ask "what did I just tell
-   you?"; any recollection is a privacy failure, not a quirk.
-9. **No leak.** After every call has ended, the last `released` line must read
+8. **Rotation.** Dial, hang up, dial again, N times. Agents rotate round-robin
+   ([[decisions]] 034), so each call should be answered by the **next** agent in
+   the roster and all N should be heard before any repeats. If the same agent
+   answers every time, the pool has regressed to last-freed-first.
+9. **Clean reuse.** Keep going until an agent comes round a second time (call
+   N+1), then ask "what did I just tell you?" — they must remember **nothing**
+   of their earlier call. Any recollection is a privacy failure, not a quirk.
+   Quicker alternative: temporarily cut `pool.personas` to one and restart, so
+   every call reuses the same agent.
+10. **No leak.** After every call has ended, the last `released` line must read
    `N/N free (on calls: none)`. A count that never returns to N means an agent
    leaked and capacity has permanently dropped.
 

@@ -177,6 +177,23 @@ class TestConcurrency(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(s.free_names), [f"Agent{i}" for i in range(4)])
         self.assertGreater(rejected, 0, "expected some callers to hit a full pool")
 
+    async def test_sequential_callers_rotate_through_the_whole_roster(self):
+        """One call at a time must still use EVERY agent, in order.
+
+        The bug this locks down: taking the most-recently-freed persona meant
+        that under light traffic -- which is most traffic -- the same agent
+        answered nearly every call and the rest of the roster was never heard.
+        A three-persona pool that only ever speaks as one persona is not a pool.
+        """
+        pool = AgentPool(roster(3))
+        heard = []
+        for _ in range(6):
+            persona = await pool.acquire()
+            heard.append(persona.name)
+            await pool.release(persona)
+
+        self.assertEqual(heard, ["Agent0", "Agent1", "Agent2"] * 2)
+
     async def test_a_released_persona_is_reused_by_the_next_caller(self):
         """Sequential calls, one agent at a time: the freed agent comes back.
 

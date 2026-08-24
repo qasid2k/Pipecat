@@ -717,3 +717,41 @@ convert or copy to the VM.
 **Consequences.** The wording is generic telco phrasing, not branded. Swapping in
 a recording is one line once an 8 kHz mono file is in
 `/var/lib/asterisk/sounds/custom/`, and the line is marked as such in [[runbook]].
+
+---
+
+## 034 — Agents rotate round-robin (SUPERSEDES 029)
+*Date: 2026-08-24*
+
+**Decision.** `acquire()` takes from the **front** of the free list (`pop(0)`),
+release puts back on the end. The free list is a queue, so the agent who has been
+free longest answers next. This reverses [[decisions]] 029, which took the
+most-recently-freed agent.
+
+**Why 029 was wrong.** It optimised for a test, not for the product. Taking the
+last-freed persona made "a reused agent remembers nothing" checkable in two calls
+instead of four — genuinely convenient, and I weighed it as if that were the main
+cost. It isn't. Under light traffic, which is *most* traffic, one call finishes
+before the next begins, so the same agent went back to the head of the queue and
+answered again. The user's report was blunt and correct: **"I never hear Alex."**
+With three personas and sequential calls, Daniel answered every time and the
+other two were unreachable unless three calls overlapped. A three-persona pool
+that only ever speaks as one persona is not a pool — the entire feature was
+invisible in normal use.
+
+029 did name this consequence ("under light traffic one persona takes most
+calls") and dismissed it as costless because personas are stateless. That reasoned
+about the *implementation* — nothing wears out — and ignored the *caller*, for
+whom variety is the whole point of the feature.
+
+**Consequences.** Consecutive callers now get different agents, and the roster is
+used evenly. A caller who rings straight back gets a *different* agent, which also
+removes the mildly uncanny "same agent, no memory of me" that 029 produced.
+
+The cost is the one 029 was avoiding: verifying clean-context-on-reuse now needs
+N+1 sequential calls to see the same agent twice, or a temporary one-persona
+roster. That is a test procedure, and test procedures are allowed to be slightly
+tedious — [[runbook]] §5 step 8 says how.
+
+Locked down by `test_sequential_callers_rotate_through_the_whole_roster`, which
+asserts the exact rotation order, so this cannot regress into 029 unnoticed.
