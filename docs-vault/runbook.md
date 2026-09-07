@@ -1,6 +1,6 @@
 # Runbook
 
-How to run it, what it needs, and how to extend it. Current as of **2026-07-30**
+How to run it, what it needs, and how to extend it.
 Related: [[flow]], [[architecture]], [[decisions]], [[bugs]], [[personas]], [[changelog]].
 
 ---
