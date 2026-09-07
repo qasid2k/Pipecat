@@ -5,7 +5,7 @@ decision is reversed, add a new entry that supersedes it and link back.
 
 Format: `## NNN — Title` / *Date* / **Decision** / **Why** / **Consequences**.
 
-Related: [[architecture]], [[bugs]], [[runbook]], [[changelog]].
+Related: [[architecture]], [[bugs]], [[runbook]], [[changelog]], [[flow]].
 
 ---
 

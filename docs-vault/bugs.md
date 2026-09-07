@@ -5,7 +5,7 @@ the value is that the symptom is searchable and the fix is not re-litigated.
 The earlier entries were recovered from code comments and git history on
 2026-07-30, so their dates are approximate.
 
-Related: [[architecture]], [[decisions]], [[runbook]].
+Related: [[architecture]], [[decisions]], [[runbook]], [[flow]].
 
 ---
 

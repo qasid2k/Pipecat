@@ -2,7 +2,7 @@
 
 Status: **as-built, 2026-07-30, after Phase 2** (transport interface + Asterisk
 adapter). Every detail here was read off the code, not remembered.
-Related: [[decisions]], [[bugs]], [[runbook]], [[changelog]].
+Related: [[decisions]], [[bugs]], [[runbook]], [[changelog]], [[flow]].
 
 One Asterisk AI voice agent. **Single agent, single persona, single voice.**
 No agent pool, no queueing, no call recording of audio (transcripts only).

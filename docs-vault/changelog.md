@@ -1,7 +1,7 @@
 # Changelog
 
 Dated, newest first. One entry per phase / notable change. Related:
-[[architecture]], [[decisions]], [[bugs]], [[runbook]], [[personas]].
+[[flow]], [[architecture]], [[decisions]], [[bugs]], [[runbook]], [[personas]].
 
 ---
 
