@@ -180,7 +180,40 @@ than silently running with transfer broken. Either put the ARI variables in
 `.env`, or copy `config.yaml` to `config.local.yaml`, comment out `ari_pass_env`
 there, and run `python bot.py config.local.yaml`.
 
-Stop with `Ctrl+C`.
+### Stopping it — the drain
+
+`Ctrl+C` (or `SIGTERM`, e.g. from systemd) starts a **graceful drain** rather
+than killing the process:
+
+```
+SIGTERM received -- draining (Ctrl+C again to force)
+shutting down: no new calls will be accepted
+waiting up to 30s for 2 call(s) to finish
+[<uuid>] released 'Sarah' (caller hung up) | 3/3 free (on calls: none)
+stopped cleanly | 3/3 free (on calls: none)
+```
+
+What it does, in this order:
+
+1. **Stops accepting.** A caller who arrives mid-shutdown is *refused*, not
+   answered — they can ring back; a caller answered and then cut off cannot tell
+   what happened.
+2. **Waits** `service.drain_timeout_s` (default 30 s) for calls in progress.
+3. **Cancels** whatever is still up. This is safe, not brutal: each call's
+   `finally` still runs, so the persona returns to the pool and the audio path
+   closes. A cancelled caller loses the rest of their sentence, not their slot.
+4. **Then** tears down the transport — deliberately last, because ending a call
+   cleanly needs ARI (to destroy its bridge and media channel) and the audio
+   path. Stopping the transport first would orphan Asterisk channels.
+
+**Press Ctrl+C again to skip the wait.** One caller who never hangs up should
+not hold a deploy hostage for the full timeout.
+
+**The line to check:** `stopped cleanly | N/N free`. Anything less than `N/N`
+means a persona did not come back — which, since the process is exiting, matters
+less for this run than as a signal that a release path is broken.
+
+`service.drain_timeout_s: 0` cuts calls off immediately.
 
 ---
 

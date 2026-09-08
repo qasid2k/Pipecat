@@ -755,3 +755,73 @@ tedious — [[runbook]] §5 step 8 says how.
 
 Locked down by `test_sequential_callers_rotate_through_the_whole_roster`, which
 asserts the exact rotation order, so this cannot regress into 029 unnoticed.
+
+---
+
+## 035 — Shutdown drains: refuse, wait, cancel, then tear down
+*Date: 2026-09-08*
+
+**Decision.** SIGINT/SIGTERM starts a graceful drain in this order: stop
+accepting (callers arriving mid-shutdown are *rejected*), wait
+`service.drain_timeout_s` for in-flight calls, cancel whatever remains, and only
+**then** stop the transport. A second signal skips the wait.
+
+**Why the order is the decision.** Tearing down the transport first is the
+obvious implementation and it is wrong: ending a call cleanly *needs* ARI, to
+destroy that call's bridge and media channel, and needs the audio path to close.
+Stopping the transport first pulls both out from under the calls we are trying to
+end politely, and leaves orphaned channels on the Asterisk side — the exact
+outcome a graceful shutdown exists to prevent.
+
+**Why cancelling is safe rather than brutal.** Every call's `finally` still runs
+under cancellation, so the persona returns to the pool and the audio path closes
+([[decisions]] 028). A cancelled caller loses the rest of their sentence, not
+their slot. This is already tested — `test_persona_released_when_the_call_task_is_cancelled`
+predates the drain and is what makes the timeout safe to use at all.
+
+**Why a caller arriving mid-shutdown is refused, not answered.** A caller told
+"no" can ring back. A caller answered and then cut off mid-conversation cannot
+tell what happened. Asterisk keeps connecting until the transport is actually
+down, so this branch is reachable, not theoretical.
+
+**Why the second signal matters as much as the first.** Without it, one caller
+who never hangs up holds a deploy hostage for the whole timeout, and the operator
+who has already asked twice is told to wait.
+
+**Consequences.** `add_signal_handler` is not implemented on Windows' proactor
+loop — and Windows is the development machine even though Linux is the target —
+so there is a `signal.signal` fallback that hops back onto the loop with
+`call_soon_threadsafe`. The drain also gathers every task's result at the end:
+an exception nobody retrieves is re-raised at garbage-collection time and would
+print a stray traceback in the middle of the shutdown log, exactly where it looks
+like the shutdown itself broke. 8 tests in `tests/test_drain.py`.
+
+---
+
+## 036 — The layering invariants are a test, not a claim
+*Date: 2026-09-08*
+
+**Decision.** `tests/test_layering.py` enforces, on every test run, that nothing
+outside `engine/` imports Pipecat, that `core/` imports no adapter/engine/factory
+(against an explicitly declared allow-list), and that `bot.py` and `core/pool.py`
+never reference `PipecatEngine` in code.
+
+**Why.** [[architecture]] has described these as "machine-checked" since the
+modular refactor, but **no checker was ever committed** — the claim rested on
+someone having run a grep once, months ago. A documented invariant with no
+enforcement is worse than no claim at all: it is trusted without being true. This
+is the seam the whole design rests on, and the one a future second engine
+depends on.
+
+**Why `ast`, not grep.** Text search cannot tell code from prose. The first run
+proved it: a raw search for "PipecatEngine" failed on `bot.py`, which mentions it
+in a *comment* explaining why the startup warm-up is safe. Parsing imports and
+`Name`/`Attribute` nodes gets that right, and also catches
+`import pipecat.services.x as y`, which a naive `from pipecat` grep misses.
+
+**Consequences.** `core/`'s third-party dependencies are now a declared list in
+the test rather than whatever happens to be imported, so adding one is a
+deliberate act visible in review. The reader must use `utf-8-sig`:
+`transports/audiosocket.py` carries a UTF-8 BOM (a PowerShell redirect somewhere
+in its history) which Python's own tokenizer strips but `ast.parse` on a plain
+utf-8 read will not. Development-only scratch files are excluded by name.

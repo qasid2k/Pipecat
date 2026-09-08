@@ -150,3 +150,18 @@ pool:
   # defaults inherited from engine.persona. Omit `pool:` entirely and the
   # service runs as a pool of one, built from engine.persona -- exactly the
   # single-agent behaviour it had before pooling existed.
+
+# =============================================================================
+#  How the PROCESS behaves. Nothing here changes what a caller hears.
+# =============================================================================
+service:
+  # On SIGTERM or Ctrl+C the bot stops accepting new calls and waits this long
+  # for the calls already in progress to finish on their own. Whatever is still
+  # up when it expires is cancelled -- which is safe, not brutal: each call's
+  # `finally` still runs, so its persona returns to the pool and its audio path
+  # closes. A cancelled caller loses the rest of their sentence, not their slot.
+  #
+  # Long enough to finish a sentence and hang up properly; short enough that a
+  # deploy is not held hostage by one caller who will not stop talking. Press
+  # Ctrl+C a second time to skip the wait entirely. 0 = cut calls off at once.
+  drain_timeout_s: 30

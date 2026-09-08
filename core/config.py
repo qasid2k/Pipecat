@@ -529,6 +529,35 @@ def config_for_persona(config: AppConfig, persona: PoolPersona) -> AppConfig:
 
 
 # ---------------------------------------------------------------------------
+# Service -- how the process itself behaves, as opposed to what it says
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ServiceConfig:
+    """Operational settings: nothing here changes what a caller hears."""
+
+    # How long a shutdown waits for calls already in progress before cutting
+    # them off. Long enough to finish a sentence and hang up properly, short
+    # enough that a deploy is not held hostage by one caller who will not stop
+    # talking. A second Ctrl+C skips the wait entirely.
+    drain_timeout_s: float = 30.0
+
+
+def _load_service(data) -> ServiceConfig:
+    path = "service"
+    d = _section(data, path, allowed={"drain_timeout_s"})
+    defaults = ServiceConfig()
+    timeout = _number(
+        d.get("drain_timeout_s", defaults.drain_timeout_s), f"{path}.drain_timeout_s"
+    )
+    if not 0 <= timeout <= 600:
+        raise ConfigError(
+            f"{path}.drain_timeout_s: {timeout} is out of range. Use 0-600 seconds "
+            "(0 means cut calls off immediately on shutdown)."
+        )
+    return ServiceConfig(drain_timeout_s=timeout)
+
+
+# ---------------------------------------------------------------------------
 # Top level
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
@@ -536,6 +565,7 @@ class AppConfig:
     transport: TransportConfig
     engine: EngineConfig
     pool: PoolConfig = field(default_factory=PoolConfig)
+    service: ServiceConfig = field(default_factory=ServiceConfig)
     source: Path | None = None
 
 
@@ -576,7 +606,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
     top = _section(
         raw, "(top level)",
-        allowed={"transport", "engine", "pool"}, required={"transport", "engine"},
+        allowed={"transport", "engine", "pool", "service"},
+        required={"transport", "engine"},
     )
 
     env = _Env()
@@ -590,7 +621,10 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         if "pool" in top
         else _pool_from_single_persona(engine)
     )
+    service = _load_service(top.get("service", {}))
     # Everything else validated first, so one run reports every problem it can.
     env.raise_if_missing()
 
-    return AppConfig(transport=transport, engine=engine, pool=pool, source=p)
+    return AppConfig(
+        transport=transport, engine=engine, pool=pool, service=service, source=p
+    )

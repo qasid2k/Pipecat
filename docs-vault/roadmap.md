@@ -40,25 +40,26 @@ configurable* refactor, and the *multi-agent pool*.
 The pool works. This phase is about being able to *operate* it and to *extend*
 it, and it is the last phase of the current project.
 
-- [ ] **Graceful drain** on SIGTERM/SIGINT — stop accepting new calls, let
-      in-flight calls finish (or time-box them), release personas, close the
-      transport and provider connections. Today, Ctrl+C mid-call leaves the
-      shutdown path untested and possibly orphaned channels.
-- [ ] **Startup health** — N, persona names and transport are already logged;
-      formalise it, and keep refusing to start on invalid config.
-- [ ] **Structured logging** — the per-call UUID keying exists; confirm it covers
-      assign / release / reject consistently and nothing else needs adding.
+- [x] **Graceful drain** on SIGTERM/SIGINT — stops accepting, refuses callers who
+      arrive mid-shutdown, waits `service.drain_timeout_s` (default 30 s), then
+      cancels what is left (safe: each `finally` still releases its persona), and
+      only *then* tears down the transport. A second Ctrl+C skips the wait.
+      `bot.py` `_install_signal_handlers` / `_drain`; 8 tests in
+      `tests/test_drain.py`. See [[runbook]] §3.
+- [x] **Startup health** — N, persona names, transport and engine logged at boot;
+      invalid config still refuses to start.
 - [ ] **Resource measurement** — CPU and memory per concurrent call, and a
       *tested* ceiling for N on this VM. Measure, do not estimate. See §4.
-- [ ] **`adapters.md`** — the contract for onboarding a new telephony vendor:
-      `BaseTransport` + `CallSession`, the canonical-audio rule (convert inside
-      the adapter), transfer and busy-reject in the vendor's own terms, and the
-      note that the dialplan `GROUP` gate is Asterisk-only.
-- [ ] **Engine-agnostic audit** — verify nothing outside `engine/` imports
-      Pipecat and that the pool, call loop and transports use only the `Engine`
-      interface. **Write it as a committed test.** The vault has called these
-      invariants "machine-checked" since the last project, but no checker was
-      ever committed — that claim is currently unbacked.
+- [x] **`adapters.md`** — written: the contract, its three sub-contracts (audio,
+      control, capacity), the threading rules, a capability checklist, and an
+      honest note that it has been exercised by exactly one vendor.
+- [x] **Engine-agnostic audit** — now a committed test rather than a claim.
+      `tests/test_layering.py` parses imports with `ast` and enforces that
+      nothing outside `engine/` imports Pipecat, that `core/` depends on no
+      adapter or engine, and that `bot.py` / `core/pool.py` never reference
+      `PipecatEngine` in code.
+- [ ] **Structured logging + call records** — moved into Stage B of the call-centre
+      plan, where it is a prerequisite rather than a nicety.
 
 ---
 

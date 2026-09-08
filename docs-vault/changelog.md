@@ -6,6 +6,35 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-08 — Stage A: the service can be stopped, and the layering is enforced
+First stage of the [[roadmap]] call-centre plan. Prerequisite work: you cannot
+operate a fleet of nodes you cannot stop cleanly, and you cannot rely on a seam
+nothing checks.
+
+* **Graceful drain** on SIGINT/SIGTERM. Stop accepting → *refuse* callers who
+  arrive mid-shutdown → wait `service.drain_timeout_s` (new, default 30 s) →
+  cancel what is left → **then** tear down the transport. The order is the
+  decision: ending a call cleanly needs ARI and the audio path, so stopping the
+  transport first would orphan Asterisk channels ([[decisions]] 035). A second
+  Ctrl+C skips the wait. Windows needs a `signal.signal` fallback because
+  `add_signal_handler` is unimplemented on the proactor loop — and Windows is the
+  development machine.
+* **Cancelling is safe, not brutal**: each call's `finally` still releases its
+  persona and closes its audio. A cancelled caller loses the rest of their
+  sentence, not their slot.
+* **`tests/test_layering.py`** — the invariants this vault has called
+  "machine-checked" since the modular refactor, finally *actually* checked, on
+  every test run. Parses imports with `ast`, not grep — which mattered
+  immediately: a text search for `PipecatEngine` false-positived on a *comment*
+  in `bot.py` ([[decisions]] 036).
+* **`adapters.md`** — the contract for onboarding a new telephony vendor, with an
+  honest note that it has been exercised by exactly one.
+
+39 tests (up from 27): 8 for the drain, 3 for layering, plus a fix so a call that
+fails during shutdown no longer prints a stray traceback into the shutdown log.
+
+---
+
 ## 2026-07-31 — Multi-agent pool, Phase 4: the dialplan capacity gate
 The (N+1)th Asterisk caller now hears a spoken busy message before ever reaching
 the app, instead of a silent hangup.
