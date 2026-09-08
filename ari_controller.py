@@ -45,20 +45,21 @@ class AriCall:
     # caller-supplied.
     caller_id: str = "unknown"
 
-    # ASTERISK'S OWN identifiers for this call, straight from the StasisStart
-    # event. Not used by any logic here -- they exist purely so a call record
-    # can be joined to Asterisk's CDR and CEL tables, and through them to the
-    # carrier's records.
+    # ASTERISK'S OWN identifier for the whole call this channel belongs to.
     #
-    # They are captured at StasisStart because they CANNOT BE BACKFILLED: once
-    # the channel is gone, nothing in this process can reconstruct which CDR row
-    # was this call. Every identifier we mint ourselves (the AudioSocket UUID,
-    # the em-id, the recording stamp) is meaningless outside this process.
+    # There is deliberately no `uniqueid` field: in ARI, `channel.id` **is** the
+    # uniqueid -- the same value AMI and the CDR call `uniqueid`, and the one
+    # printed as `1787584901.399` in our own logs. `channel_id` above already
+    # holds it, and storing it twice under two names invites the two copies to
+    # disagree and makes a reader wonder which is authoritative.
     #
-    # uniqueid identifies THIS channel; linkedid identifies the whole call it
-    # belongs to and is what stays constant across a transfer -- so linkedid is
-    # the one that joins a transferred call back together.
-    uniqueid: str = ""
+    # linkedid is genuinely different: it names the whole call rather than one
+    # channel, and it stays constant across a transfer -- so it is the id that
+    # stitches a transferred call back together in the CDR. ARI does not put it
+    # on the channel object, so it is fetched explicitly (see _on_stasis_start).
+    #
+    # Captured while the call is live because it CANNOT BE BACKFILLED: once the
+    # channel is gone, nothing here can work out which CDR row this call was.
     linkedid: str = ""
 
 
@@ -112,6 +113,18 @@ class AriController:
     async def hangup(self, cid):
         return await self._req("DELETE", f"/channels/{cid}")
 
+    async def channel_var(self, cid, name) -> str:
+        """Read one channel variable, e.g. CHANNEL(linkedid).
+
+        Returns "" rather than raising or None: this is used to enrich a record,
+        so a failure should cost a join key, never a call. `_req` already logs
+        the HTTP error if there was one.
+        """
+        result = await self._req("GET", f"/channels/{cid}/variable", variable=name)
+        if isinstance(result, dict):
+            return str(result.get("value") or "")
+        return ""
+
     async def continue_in_dialplan(self, cid, context, extension, priority=1):
         """Send a channel back to the dialplan -- used to hand off / transfer."""
         return await self._req(
@@ -152,16 +165,18 @@ class AriController:
         cid = chan["id"]
 
         caller = chan.get("caller", {}).get("number") or "?"
-        # Asterisk's own ids. Present on every StasisStart; `.get` with a default
-        # rather than indexing, because a missing id should cost us a join key,
-        # not the call.
-        uniqueid = str(chan.get("id") or "")
-        # ARI does not expose linkedid at the top level of the channel object on
-        # every version, so fall back to the channelvars block when it is there.
-        linkedid = str((chan.get("channelvars") or {}).get("LINKEDID") or "")
+        # `cid` IS Asterisk's uniqueid -- ARI's channel.id and AMI/CDR's uniqueid
+        # are the same value, which is why our logs already print it as
+        # `1787584901.399`. Nothing extra to capture for that join key.
+        #
+        # linkedid is NOT on the channel object, so it needs its own fetch. One
+        # small GET on loopback, on a setup path that already makes four ARI
+        # calls -- and it is the id that survives a transfer, so it is what joins
+        # a transferred call back together in the CDR.
+        linkedid = await self.channel_var(cid, "CHANNEL(linkedid)")
         logger.info(
             f"ARI: call in {cid} ({chan.get('name')}) from {caller} "
-            f"uniqueid={uniqueid or '?'} linkedid={linkedid or '?'}"
+            f"linkedid={linkedid or '?'}"
         )
 
         au = str(uuid.uuid4())
@@ -179,9 +194,7 @@ class AriController:
         bid = bridge["id"]
         await self._add(bid, cid)
 
-        self.registry[au] = AriCall(
-            cid, bid, em_id, au, caller, uniqueid=uniqueid, linkedid=linkedid
-        )
+        self.registry[au] = AriCall(cid, bid, em_id, au, caller, linkedid=linkedid)
 
         em = await self._external_media(
             app=self._app,

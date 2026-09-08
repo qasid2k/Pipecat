@@ -226,10 +226,13 @@ class AsteriskCallSession(CallSession):
         if self._ari_call is None:
             return {}
         return {
-            "channel_id": self._ari_call.channel_id,
-            "bridge_id": self._ari_call.bridge_id,
-            "uniqueid": self._ari_call.uniqueid,
+            # ARI's channel.id IS Asterisk's uniqueid -- the same value the CDR
+            # stores in its `uniqueid` column. Emitted under that name, once,
+            # rather than also as "channel_id": two keys holding one string only
+            # raises the question of which is authoritative.
+            "uniqueid": self._ari_call.channel_id,
             "linkedid": self._ari_call.linkedid,
+            "bridge_id": self._ari_call.bridge_id,
         }
 
     @property

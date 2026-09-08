@@ -42,18 +42,22 @@ class VendorIdsTest(unittest.TestCase):
     """The join keys. These cannot be backfilled once the channel is gone."""
 
     def test_asterisk_session_exposes_the_ids_that_join_to_cdr(self):
+        # channel_id is what ARI calls channel.id, and it IS Asterisk's
+        # uniqueid -- hence the "1787584901.399" shape rather than a PJSIP name.
         ari_call = AriCall(
-            "PJSIP/101-0001", "bridge-1", "em-1", "uuid-1", "101",
-            uniqueid="1787584901.399", linkedid="1787584901.399",
+            "1787584901.399", "bridge-1", "em-1", "uuid-1", "101",
+            linkedid="1787584901.396",
         )
         session = AsteriskCallSession(
             io=FakeIO(), addr=("127.0.0.1", 5000), controller=object(),
             ari_call=ari_call,
         )
         ids = session.vendor_ids
-        self.assertEqual(ids["channel_id"], "PJSIP/101-0001")
         self.assertEqual(ids["uniqueid"], "1787584901.399")
-        self.assertEqual(ids["linkedid"], "1787584901.399")
+        self.assertEqual(ids["linkedid"], "1787584901.396")
+        # One key per value: uniqueid and channel_id are the same string, and
+        # exposing both only raises the question of which is authoritative.
+        self.assertNotIn("channel_id", ids)
 
     def test_a_call_without_ari_reports_no_vendor_ids(self):
         """A direct call to 6000 has no channel; empty is correct, not an error."""
