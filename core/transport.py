@@ -105,6 +105,23 @@ class CallSession(ABC):
         destroy a call we have already handed to someone else.
         """
 
+    @property
+    def vendor_ids(self) -> dict[str, str]:
+        """The VENDOR's own identifiers for this call, for joining records.
+
+        `call_id` is ours and means nothing outside this process. These are the
+        ids the vendor and its downstream systems use — for Asterisk, the
+        channel id plus `uniqueid`/`linkedid`, which is what lets a call record
+        join to a CDR or CEL row and through them to the carrier's records.
+
+        Captured while the call is live because they **cannot be backfilled**:
+        once the channel is gone, nothing here can work out which CDR row it was.
+
+        Empty by default: a vendor that exposes nothing joinable is allowed, it
+        just means records stop at our own boundary.
+        """
+        return {}
+
     async def disconnect(self) -> None:
         """End the call **for the caller too**, not just on our side.
 

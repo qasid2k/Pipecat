@@ -6,6 +6,43 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-08 — Stage B: one call can now be reconstructed afterwards
+No new infrastructure — this is the foundation the database, the dashboard and QA
+scoring all read. Doing it after the database would have meant persisting
+unjoinable data ([[decisions]] 037).
+
+* **Structured logging.** `core/logging.py`: a console sink (short call id,
+  readable) and a rotating JSON sink (full call id and `tenant_id` as *fields*).
+  `logger.contextualize()` in `run_call` binds the call id onto everything inside
+  that call's task, including the engine and the recorder. The two AudioSocket
+  I/O threads bind explicitly, because threads do not inherit the context.
+* **The recordings are no longer orphaned.** Filenames are keyed by `call_id`
+  instead of a random tag that appeared nowhere else, and both files now carry a
+  `call` header naming the caller, persona, voice, model, tenant and Asterisk's
+  ids. You could previously read a transcript and not know whose it was.
+* **Asterisk's `uniqueid`/`linkedid` are captured** at StasisStart and exposed as
+  `CallSession.vendor_ids` — the only bridge to CDR, CEL and carrier records, and
+  impossible to backfill once the channel is gone.
+* **Transcript writes moved off the event loop.** They were synchronous
+  `open()`/`write()` in the frame handler — the same hazard that dropped calls in
+  B-001 and B-011.
+* **The overload signals are visible** ([[decisions]] 038). `frames_dropped` was
+  incremented and read nowhere; the write pacer's resync was detected and
+  discarded. Both now appear in the closing line and heartbeat when non-zero.
+  Stage E cannot find a ceiling it cannot see.
+* **`tenant_id`** threaded through config, logs and records — the SaaS seam,
+  cheap now and a migration later.
+
+12 tests in `tests/test_observability.py`; **59 total**. The layering test caught
+`core/`'s new `loguru` dependency on its first run, which is exactly what it is
+for; it is now in that test's declared allow-list rather than assumed.
+
+**Deferred with reason:** live *agent* turns in the .jsonl — the recorder sits
+between STT and the LLM and never sees its output frames. Both sides are already
+in `conversation.json`; doing it properly belongs in Stage C. See [[roadmap]] §2.
+
+---
+
 ## 2026-09-08 — Stage A: the service can be stopped, and the layering is enforced
 First stage of the [[roadmap]] call-centre plan. Prerequisite work: you cannot
 operate a fleet of nodes you cannot stop cleanly, and you cannot rely on a seam

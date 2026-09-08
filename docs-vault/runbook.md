@@ -439,15 +439,50 @@ Run these after **every** phase — this is the regression suite:
    `N/N free (on calls: none)`. A count that never returns to N means an agent
    leaked and capacity has permanently dropped.
 
-### The pool's own log lines
+### Reading the logs
 
-Every line is keyed by the call UUID, so a single call can be followed end to end:
+**Console** — one line per event, with the first 8 characters of the call id so
+concurrent calls can be told apart at a glance:
 
 ```
-[<uuid>] assigned 'Alex' (aura-2-helena-en) to <caller> | 2/3 free (on calls: Alex)
-[<uuid>] released 'Alex' (caller hung up) | 3/3 free (on calls: none)
-[<uuid>] POOL FULL -- rejecting call from <caller> | 0/3 free (on calls: Alex, Sarah, Daniel)
+17:22:09.481 INFO    9cb001fc assigned 'Daniel' (aura-2-orion-en) to 103 | 2/3 free
+17:22:41.006 INFO    9cb001fc CALLER: I need to speak to billing
+17:22:44.115 INFO    9cb001fc TOOL: transfer_to_department -> billing
+17:22:47.882 INFO    9cb001fc released 'Daniel' (caller hung up) | 3/3 free
+17:22:47.883 WARNING 9cb001fc --- Call ended after 38.4s; in=1904 out=1921 (real=402) ---
 ```
+
+**JSON file** (`service.log.file`, default `logs/agent.jsonl`) — the same events,
+one object per line, with `call_id` and `tenant_id` as **fields** rather than
+text inside a message. That is what makes three concurrent calls separable by a
+query instead of a regex:
+
+```bash
+# everything that happened on one call, in order
+jq -r 'select(.record.extra.call_id=="9cb001fc-...") | .record.message' logs/agent.jsonl
+
+# calls that hit overload
+grep DROPPED logs/agent.jsonl
+```
+
+The file rotates at `service.log.rotation` and is deleted after
+`service.log.retention`. **It contains caller numbers and transcribed speech** —
+the same personal data as `recordings/`, and it is git-ignored for the same
+reason. See the retention note in [[roadmap]] §5.
+
+### Signals that something is wrong
+
+| In a log line | Means |
+|---|---|
+| `POOL FULL -- rejecting call` | the dialplan cap and the roster have drifted (§4) |
+| `DROPPED=<n>` in the closing line | inbound frames thrown away — the pipeline could not keep up with the caller |
+| `slips=<n>` | the 20 ms write pacer fell >100 ms behind — the agent's audio reached the caller late |
+| `in=0` | we never heard the caller at all (an inbound-audio problem) |
+| `real=0` | the agent never spoke |
+
+`DROPPED` and `slips` are the two overload signals. Both were counted and
+silently discarded before Stage B; **a healthy call shows neither**, so anything
+appearing there is worth chasing and is what should stop a load test.
 
 `POOL FULL` on an **Asterisk** call means the dialplan cap and the roster have
 drifted apart — the dialplan should have caught that caller first and played the

@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from core.config import AppConfig, ConfigError, load_config
+from core.logging import configure_logging
 from core.pool import AgentPool
 from core.transport import BaseTransport, CallSession
 from factories import create_engine_for_persona, create_transport
@@ -80,6 +81,19 @@ async def run_call(
     fail (it talks to the vendor), and if it did, an agent released afterwards
     would never be released at all.
     """
+    # Everything logged inside this block -- here, in the engine, in the
+    # transcript recorder, in code that has never heard of logging setup --
+    # carries this call's id. contextualize() stores it in a contextvar, and
+    # each call is its own task, so the bindings cannot bleed between concurrent
+    # calls. The AudioSocket I/O threads are the one exception: threads do not
+    # inherit the context, so they bind explicitly (see core/logging.py).
+    with logger.contextualize(call_id=session.call_id, caller_id=session.caller_id):
+        await _serve(config, pool, transport, session)
+
+
+async def _serve(
+    config: AppConfig, pool: AgentPool, transport: BaseTransport, session: CallSession
+):
     persona = await pool.acquire()
 
     if persona is None:
@@ -88,22 +102,23 @@ async def run_call(
         # net behind the dialplan's spoken "all agents busy" message (Phase 4);
         # reaching it means the caller is hung up on without explanation, so a
         # rise in these lines means the dialplan cap and the roster have drifted.
+        # No [call_id] prefix any more: the logging setup binds it to every line
+        # in this call, so repeating it in the message would just print it twice.
         logger.warning(
-            f"[{session.call_id}] POOL FULL -- rejecting call from "
-            f"{session.caller_id} | {pool.stats()}"
+            f"POOL FULL -- rejecting call from {session.caller_id} | {pool.stats()}"
         )
         await transport.reject(session)
         return
 
     logger.info(
-        f"[{session.call_id}] assigned '{persona.name}' ({persona.voice}) to "
-        f"{session.caller_id} | {pool.stats()}"
+        f"assigned '{persona.name}' ({persona.voice}) to {session.caller_id} "
+        f"| {pool.stats()}"
     )
     try:
         engine = create_engine_for_persona(config, persona)
         await engine.run(session)
     except Exception as e:
-        logger.exception(f"[{session.call_id}] engine failed ('{persona.name}'): {e}")
+        logger.exception(f"engine failed ('{persona.name}'): {e}")
     finally:
         # Safe on a CANCELLED call (a dropped line, and in Phase 5 a shutdown
         # drain) only because `release` never yields: its lock is always
@@ -112,8 +127,7 @@ async def run_call(
         # agent -- the same `await`-in-the-lock hazard the lock guards against.
         await pool.release(persona)
         logger.info(
-            f"[{session.call_id}] released '{persona.name}' "
-            f"({session.end_reason}) | {pool.stats()}"
+            f"released '{persona.name}' ({session.end_reason}) | {pool.stats()}"
         )
         # disconnect(), not hangup(). Reaching here means the conversation is
         # over from OUR side -- the caller hung up, or the engine finished, or
@@ -250,7 +264,9 @@ async def main(config: AppConfig):
                 # back, a caller answered and then cut off cannot tell what
                 # happened. Asterisk will keep connecting until the transport is
                 # actually torn down, so this branch is reachable in practice.
-                logger.warning(f"[{session.call_id}] shutting down -- refusing call")
+                logger.warning(
+                    f"shutting down -- refusing call {session.call_id}"
+                )
                 await transport.reject(session)
                 continue
             # One TASK per call, deliberately: awaiting run_call here would run
@@ -295,7 +311,19 @@ if __name__ == "__main__":
         logger.error(f"Configuration problem:\n{e}")
         sys.exit(1)
 
-    logger.info(f"Config: {cfg.source}")
+    # Sinks first: everything below this line is meant to land in them, and a
+    # log line written before setup goes to loguru's default stderr sink and
+    # nowhere else.
+    configure_logging(
+        level=cfg.service.log.level,
+        file=cfg.service.log.file,
+        rotation=cfg.service.log.rotation,
+        retention=cfg.service.log.retention,
+        tenant_id=cfg.service.tenant_id,
+        base_dir=cfg.source.parent if cfg.source else None,
+    )
+
+    logger.info(f"Config: {cfg.source} | tenant={cfg.service.tenant_id}")
     logger.info(
         f"transport={cfg.transport.provider} | engine={cfg.engine.provider} | "
         f"{cfg.engine.stt.provider} STT -> {cfg.engine.llm.model} -> "

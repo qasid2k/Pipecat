@@ -24,7 +24,7 @@ Verified against pipecat-ai 1.6.0.
 """
 
 import asyncio
-import uuid
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -159,9 +159,18 @@ class PipecatEngine(Engine):
     and transcript files.
     """
 
-    def __init__(self, config: EngineConfig, recordings_dir: Path = RECORDINGS_DIR):
+    def __init__(
+        self,
+        config: EngineConfig,
+        recordings_dir: Path = RECORDINGS_DIR,
+        tenant_id: str = "default",
+    ):
         self._config = config
         self._recordings_dir = recordings_dir
+        # Stamped onto every record this call writes. One value today; the point
+        # is that records written now are still attributable if a second tenant
+        # ever exists, instead of needing a migration to say who they belonged to.
+        self._tenant_id = tenant_id
 
     # -- building the services from config ---------------------------------
     def _build_stt(self):
@@ -256,12 +265,35 @@ class PipecatEngine(Engine):
         path -- including the exception path below.
         """
         started = datetime.now()
-        # Include a short random tag: two calls that connect in the SAME second
-        # must not share a filename (they'd overwrite each other's transcript).
-        stamp = started.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
-        self._recordings_dir.mkdir(exist_ok=True)
-        recorder = TranscriptRecorder(self._recordings_dir / f"{stamp}-transcript.jsonl")
+        # The filename is keyed by CALL ID, not by a fresh random tag.
+        #
+        # It used to be `<timestamp>-<uuid4[:6]>`, a value that appeared nowhere
+        # else -- so a transcript on disk could not be matched to the call that
+        # produced it, to a caller, or to an Asterisk channel, except by matching
+        # wall-clock seconds against the log. Using call_id makes the join
+        # trivial in both directions; the timestamp stays because it makes the
+        # directory readable and sortable by eye.
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session.call_id))
+        stamp = f"{safe_id}-{started.strftime('%Y%m%d-%H%M%S')}"
+
+        # Everything needed to attribute this call, written INTO both files.
+        # `vendor_ids` carries Asterisk's own uniqueid/linkedid, which is what
+        # lets these records join to a CDR row -- see core/transport.py.
+        call_meta = {
+            "call_id": str(session.call_id),
+            "caller_id": session.caller_id,
+            "tenant_id": self._tenant_id,
+            "persona": self._config.persona.name,
+            "voice": self._config.tts.voice,
+            "llm_model": self._config.llm.model,
+            **session.vendor_ids,
+        }
+
+        self._recordings_dir.mkdir(parents=True, exist_ok=True)
+        recorder = TranscriptRecorder(
+            self._recordings_dir / f"{stamp}-transcript.jsonl", call=call_meta
+        )
 
         transport = CallSessionTransport(session)
         pipeline, context = self._build_pipeline(transport, recorder)
@@ -296,12 +328,20 @@ class PipecatEngine(Engine):
         finally:
             watcher.cancel()
             save_conversation(
-                context, self._recordings_dir / f"{stamp}-conversation.json", started
+                context,
+                self._recordings_dir / f"{stamp}-conversation.json",
+                started,
+                call={**call_meta, "end_reason": session.end_reason,
+                      "cause": cause["reason"]},
             )
+            # Flush the live transcript before the process moves on. Without
+            # this, the last thing the caller said -- often the most useful line
+            # in the file -- can still be sitting on the writer's queue.
+            await recorder.close()
             duration = (datetime.now() - started).total_seconds()
             # Frame counters are vendor-specific, so they are optional extra detail.
             stats = session.stats() if hasattr(session, "stats") else ""
             logger.warning(
-                f"--- Call ended after {duration:.1f}s ({session.call_id}); {stats} ---\n"
+                f"--- Call ended after {duration:.1f}s; {stats} ---\n"
                 f"    CAUSE: {cause['reason']}"
             )

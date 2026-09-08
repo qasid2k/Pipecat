@@ -165,3 +165,22 @@ service:
   # deploy is not held hostage by one caller who will not stop talking. Press
   # Ctrl+C a second time to skip the wait entirely. 0 = cut calls off at once.
   drain_timeout_s: 30
+
+  # Who this instance answers for. Stamped on every log line, every transcript
+  # and every conversation file. There is one tenant today; the point of setting
+  # it now is that records written today stay attributable if a second company
+  # is ever served, instead of needing a migration to say who they belonged to.
+  tenant_id: techbridge
+
+  log:
+    # TRACE / DEBUG / INFO / SUCCESS / WARNING / ERROR / CRITICAL
+    level: INFO
+    # Where the MACHINE-READABLE log goes: one JSON object per line, with
+    # call_id and tenant_id as real fields rather than text inside a message.
+    # This is what makes three concurrent calls separable after the fact.
+    # Comment it out for console only.
+    file: logs/agent.jsonl
+    # Rotate at this size, delete after this age. Without both, a busy service
+    # eventually fills the disk and takes Asterisk down with it.
+    rotation: 50 MB
+    retention: 14 days

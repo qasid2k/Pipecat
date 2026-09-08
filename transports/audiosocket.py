@@ -120,14 +120,39 @@ class AudioSocketConnection:
         self.end_reason = "not ended"
         self.call_id = None
         self.frames_in = 0
+        # Inbound frames thrown away because the pipeline could not keep up.
+        # THE overload signal: anything above zero means this call was being
+        # served worse than it should have been, and it is the number that
+        # should stop a load test. It used to be incremented and never read
+        # anywhere -- invisible by accident, not by design.
         self.frames_dropped = 0
         self.frames_out = 0
         self.frames_out_real = 0
+        # Times the 20 ms write pacer fell more than 100 ms behind and had to
+        # resync. The outbound twin of frames_dropped: it means the agent's
+        # speech was not delivered at real time, which the caller hears as
+        # choppiness. Also previously detected and silently discarded.
+        self.pacer_slips = 0
 
         try:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECV_BUFFER_BYTES)
         except OSError:
             pass
+
+    @property
+    def log(self):
+        """A logger carrying this call's id, for use from the I/O THREADS.
+
+        `logger.contextualize()` in the call task binds call_id via a contextvar,
+        and `threading.Thread` does not copy the caller's context -- so these two
+        threads are outside it and would otherwise log unattributably. With three
+        calls up, the heartbeats and DTMF lines interleave, and without this you
+        cannot tell which call any of them belongs to.
+
+        Bound per call rather than cached because `call_id` is not known when the
+        connection is constructed: it arrives as the first AudioSocket message.
+        """
+        return logger.bind(call_id=str(self.call_id) if self.call_id else "-")
 
     # -- lifecycle ---------------------------------------------------------
     def start(self):
@@ -185,17 +210,17 @@ class AudioSocketConnection:
         elif msg_type == TYPE_UUID:
             try:
                 self.call_id = uuid.UUID(bytes=payload)
-                logger.info(f"Call id: {self.call_id}")
+                self.log.info(f"Call id: {self.call_id}")
             except ValueError:
                 pass
             # Wake anyone waiting to correlate this connection with an ARI call.
             self._loop.call_soon_threadsafe(self.uuid_ready.set)
         elif msg_type == TYPE_DTMF:
-            logger.info(f"DTMF pressed: {chr(payload[0]) if payload else '?'}")
+            self.log.info(f"DTMF pressed: {chr(payload[0]) if payload else '?'}")
         elif msg_type == TYPE_HANGUP:
             self._signal_end("Asterisk sent HANGUP (caller hung up)")
         elif msg_type == TYPE_ERROR:
-            logger.warning(f"Asterisk error, code {payload[0] if payload else -1}")
+            self.log.warning(f"Asterisk error, code {payload[0] if payload else -1}")
 
     def _push_incoming(self, payload: bytes):
         """Runs on the event loop. Drop oldest if the pipeline falls behind."""
@@ -237,10 +262,18 @@ class AudioSocketConnection:
                 if now - last_heartbeat >= 5.0:
                     # Proves whether we are ACTUALLY sending continuously, in
                     # the real Asterisk environment -- not just in a unit test.
-                    logger.info(
+                    # Drops and slips are included so overload is visible while
+                    # the call is still happening, not only in the closing line.
+                    self.log.info(
                         f"audio out: {self.frames_out} frames total "
                         f"({self.frames_out_real} real), +{heartbeat_frames} "
                         f"in last {now - last_heartbeat:.1f}s"
+                        + (
+                            f" | DROPPED {self.frames_dropped} in,"
+                            f" {self.pacer_slips} pacer slips"
+                            if (self.frames_dropped or self.pacer_slips)
+                            else ""
+                        )
                     )
                     last_heartbeat = now
                     heartbeat_frames = 0
@@ -250,6 +283,10 @@ class AudioSocketConnection:
                 if gap > 0:
                     time.sleep(gap)
                 elif gap < -0.1:
+                    # More than 100 ms behind: this call's audio has already been
+                    # delivered late. Count it -- resyncing silently is how a
+                    # machine at its limit goes on looking healthy.
+                    self.pacer_slips += 1
                     next_send = time.monotonic()  # fell behind -- resync
         except Exception as e:  # noqa: BLE001
             self._signal_end(f"write loop crashed: {e!r}")

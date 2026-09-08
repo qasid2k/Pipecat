@@ -57,7 +57,7 @@ def create_engine(config: AppConfig) -> Engine:
     if provider == "pipecat":
         from engine.pipecat_engine import PipecatEngine
 
-        return PipecatEngine(config.engine)
+        return PipecatEngine(config.engine, tenant_id=config.service.tenant_id)
 
     raise ConfigError(
         f"engine.provider: '{provider}' is not implemented. "

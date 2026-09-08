@@ -532,6 +532,14 @@ def config_for_persona(config: AppConfig, persona: PoolPersona) -> AppConfig:
 # Service -- how the process itself behaves, as opposed to what it says
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
+class LogConfig:
+    level: str = "INFO"
+    file: str | None = None       # None = console only
+    rotation: str = "50 MB"
+    retention: str = "14 days"
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     """Operational settings: nothing here changes what a caller hears."""
 
@@ -541,10 +549,40 @@ class ServiceConfig:
     # talking. A second Ctrl+C skips the wait entirely.
     drain_timeout_s: float = 30.0
 
+    # Who this instance is answering for. One value today, because there is one
+    # tenant -- but it is stamped on every log line and every call record from
+    # the start, so serving a second company later is an addition rather than a
+    # migration of everything ever written. See roadmap.md.
+    tenant_id: str = "default"
+
+    log: LogConfig = field(default_factory=LogConfig)
+
+
+VALID_LOG_LEVELS = {"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"}
+
+
+def _load_log(data) -> LogConfig:
+    path = "service.log"
+    d = _section(data, path, allowed={"level", "file", "rotation", "retention"})
+    defaults = LogConfig()
+    level = str(d.get("level", defaults.level)).upper()
+    if level not in VALID_LOG_LEVELS:
+        raise ConfigError(
+            f"{path}.level: '{level}' is not a log level. "
+            f"Valid options are: {sorted(VALID_LOG_LEVELS)}"
+        )
+    file = d.get("file")
+    return LogConfig(
+        level=level,
+        file=str(file) if file else None,
+        rotation=str(d.get("rotation", defaults.rotation)),
+        retention=str(d.get("retention", defaults.retention)),
+    )
+
 
 def _load_service(data) -> ServiceConfig:
     path = "service"
-    d = _section(data, path, allowed={"drain_timeout_s"})
+    d = _section(data, path, allowed={"drain_timeout_s", "tenant_id", "log"})
     defaults = ServiceConfig()
     timeout = _number(
         d.get("drain_timeout_s", defaults.drain_timeout_s), f"{path}.drain_timeout_s"
@@ -554,7 +592,14 @@ def _load_service(data) -> ServiceConfig:
             f"{path}.drain_timeout_s: {timeout} is out of range. Use 0-600 seconds "
             "(0 means cut calls off immediately on shutdown)."
         )
-    return ServiceConfig(drain_timeout_s=timeout)
+    tenant = d.get("tenant_id", defaults.tenant_id)
+    if not isinstance(tenant, str) or not tenant.strip():
+        raise ConfigError(f"{path}.tenant_id: expected a non-empty name")
+    return ServiceConfig(
+        drain_timeout_s=timeout,
+        tenant_id=tenant.strip(),
+        log=_load_log(d.get("log", {})),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -825,3 +825,85 @@ deliberate act visible in review. The reader must use `utf-8-sig`:
 `transports/audiosocket.py` carries a UTF-8 BOM (a PowerShell redirect somewhere
 in its history) which Python's own tokenizer strips but `ast.parse` on a plain
 utf-8 read will not. Development-only scratch files are excluded by name.
+
+---
+
+## 037 — A call must be reconstructable from what it leaves behind
+*Date: 2026-09-08*
+
+**Decision.** Every artifact a call produces carries the identifiers needed to
+join it to every other artifact: `call_id` bound onto every log line via
+`logger.contextualize()`, recording filenames keyed by `call_id`, a `call` header
+inside both recording files, Asterisk's own `uniqueid`/`linkedid` captured at
+StasisStart and exposed as `CallSession.vendor_ids`, and `tenant_id` stamped on
+all of it.
+
+**Why this came before the database.** The obvious next step after "we want call
+records" is to add a database. It would have been the wrong order: what the
+system produced was **not joinable**, so the rows would have been unjoinable too,
+just more expensive to fix. Concretely, before this change:
+
+* recording filenames were `<timestamp>-<fresh uuid4[:6]>` — a value that
+  appeared nowhere else, in no log line and in neither file's contents;
+* neither recording file contained the call id, the caller, the persona, the
+  Asterisk channel, the end reason or the duration;
+* Asterisk's `uniqueid`/`linkedid` were never read at all, so nothing could ever
+  be joined to a CDR, a CEL row, or a carrier's records;
+* the VAD lines, the `CALLER:` transcripts, the DTMF events and the audio
+  heartbeats carried nothing identifying the call, so with three calls up they
+  interleaved into something unattributable.
+
+You could read a transcript and not know whose it was.
+
+**Why the vendor ids specifically.** Every identifier this process mints is
+meaningless outside it. `uniqueid`/`linkedid` are Asterisk's, and they are the
+only bridge to anything downstream. They also **cannot be backfilled**: once the
+channel is gone nothing here can work out which CDR row was this call. That makes
+capturing them a now-or-never decision, which is why it landed in the stage
+before the one that needs them. `linkedid` is the one that survives a transfer,
+so it is what stitches a transferred call back together.
+
+**Why `contextualize` rather than passing a logger around.** It binds into a
+contextvar, and each call is already its own task, so *everything* inside that
+task inherits the call id — including the engine and the transcript recorder,
+neither of which has to know logging setup exists. The exception is the two
+AudioSocket I/O threads: `threading.Thread` does not copy the caller's context,
+so they bind explicitly through `AudioSocketConnection.log`. That exception is
+the price of [[decisions]] 001 and is cheaper than the alternative.
+
+**Consequences.** `core/` gained a dependency on `loguru`, which the layering
+test caught on its first run after this change — working exactly as intended, and
+now recorded in that test's declared allow-list rather than assumed. The JSON log
+holds caller numbers and transcribed speech, so it is git-ignored and needs the
+same retention policy as `recordings/` — currently neither has one, which is
+recorded as a gap rather than solved here.
+
+The per-call `[call_id]` prefixes were removed from the log messages themselves,
+since the sink now carries the field; the console shows the first 8 characters
+for readability while the JSON keeps the full value for joining.
+
+---
+
+## 038 — Overload signals are surfaced, not just counted
+*Date: 2026-09-08*
+
+**Decision.** `frames_dropped` (inbound frames discarded when the pipeline falls
+behind) and a new `pacer_slips` (the 20 ms write pacer falling >100 ms behind and
+resyncing) appear in the per-call closing line and in the 5-second heartbeat —
+but only when non-zero.
+
+**Why.** `frames_dropped` was already being incremented and was **read nowhere**:
+not logged, not in `stats()`, not exported. The pacer's resync was detected and
+silently discarded. Between them they are the two best pieces of evidence this
+system has that it is being asked for more than it can deliver — one for each
+direction of audio — and both were invisible by accident rather than by design.
+
+This matters now specifically because Stage E has to find the single-node
+ceiling. **You cannot find a ceiling you cannot see**: without these, an
+overloaded node degrades every call slightly and goes on looking healthy, and the
+load test that was meant to find the limit reports a number that is too high.
+
+**Consequences.** Shown only when non-zero, so a healthy call's closing line
+stays short and anything appearing there is worth reading. They are per-call
+counters, not process-wide — aggregating them is Stage D's job, once there is
+somewhere to aggregate into.

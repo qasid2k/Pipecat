@@ -45,6 +45,22 @@ class AriCall:
     # caller-supplied.
     caller_id: str = "unknown"
 
+    # ASTERISK'S OWN identifiers for this call, straight from the StasisStart
+    # event. Not used by any logic here -- they exist purely so a call record
+    # can be joined to Asterisk's CDR and CEL tables, and through them to the
+    # carrier's records.
+    #
+    # They are captured at StasisStart because they CANNOT BE BACKFILLED: once
+    # the channel is gone, nothing in this process can reconstruct which CDR row
+    # was this call. Every identifier we mint ourselves (the AudioSocket UUID,
+    # the em-id, the recording stamp) is meaningless outside this process.
+    #
+    # uniqueid identifies THIS channel; linkedid identifies the whole call it
+    # belongs to and is what stays constant across a transfer -- so linkedid is
+    # the one that joins a transferred call back together.
+    uniqueid: str = ""
+    linkedid: str = ""
+
 
 class AriController:
     def __init__(self, base_url, app, user, password, media_host, media_port):
@@ -136,7 +152,17 @@ class AriController:
         cid = chan["id"]
 
         caller = chan.get("caller", {}).get("number") or "?"
-        logger.info(f"ARI: call in {cid} ({chan.get('name')}) from {caller}")
+        # Asterisk's own ids. Present on every StasisStart; `.get` with a default
+        # rather than indexing, because a missing id should cost us a join key,
+        # not the call.
+        uniqueid = str(chan.get("id") or "")
+        # ARI does not expose linkedid at the top level of the channel object on
+        # every version, so fall back to the channelvars block when it is there.
+        linkedid = str((chan.get("channelvars") or {}).get("LINKEDID") or "")
+        logger.info(
+            f"ARI: call in {cid} ({chan.get('name')}) from {caller} "
+            f"uniqueid={uniqueid or '?'} linkedid={linkedid or '?'}"
+        )
 
         au = str(uuid.uuid4())
         em_id = "em-" + uuid.uuid4().hex
@@ -153,7 +179,9 @@ class AriController:
         bid = bridge["id"]
         await self._add(bid, cid)
 
-        self.registry[au] = AriCall(cid, bid, em_id, au, caller)
+        self.registry[au] = AriCall(
+            cid, bid, em_id, au, caller, uniqueid=uniqueid, linkedid=linkedid
+        )
 
         em = await self._external_media(
             app=self._app,

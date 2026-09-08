@@ -35,31 +35,61 @@ configurable* refactor, and the *multi-agent pool*.
 
 ---
 
-## 2. Next: Phase 5 — service readiness
+## 2. The call-centre stages
 
-The pool works. This phase is about being able to *operate* it and to *extend*
-it, and it is the last phase of the current project.
+Target: **500+ concurrent, elastic**, fully tracked (call records, live
+supervisor dashboard, audio recording, analytics + QA), inbound only,
+single-tenant now but tenant-seamed for SaaS later.
 
-- [x] **Graceful drain** on SIGTERM/SIGINT — stops accepting, refuses callers who
-      arrive mid-shutdown, waits `service.drain_timeout_s` (default 30 s), then
-      cancels what is left (safe: each `finally` still releases its persona), and
-      only *then* tears down the transport. A second Ctrl+C skips the wait.
-      `bot.py` `_install_signal_handlers` / `_drain`; 8 tests in
-      `tests/test_drain.py`. See [[runbook]] §3.
-- [x] **Startup health** — N, persona names, transport and engine logged at boot;
-      invalid config still refuses to start.
-- [ ] **Resource measurement** — CPU and memory per concurrent call, and a
-      *tested* ceiling for N on this VM. Measure, do not estimate. See §4.
-- [x] **`adapters.md`** — written: the contract, its three sub-contracts (audio,
-      control, capacity), the threading rules, a capability checklist, and an
-      honest note that it has been exercised by exactly one vendor.
-- [x] **Engine-agnostic audit** — now a committed test rather than a claim.
-      `tests/test_layering.py` parses imports with `ast` and enforces that
-      nothing outside `engine/` imports Pipecat, that `core/` depends on no
-      adapter or engine, and that `bot.py` / `core/pool.py` never reference
-      `PipecatEngine` in code.
-- [ ] **Structured logging + call records** — moved into Stage B of the call-centre
-      plan, where it is a prerequisite rather than a nicety.
+**500 concurrent is not a bigger version of this process — it is 10–25 nodes.**
+The single-node ceiling has never been measured, and what breaks first is not
+the pool. In the order it will actually bite:
+
+| # | Limit | Where | Bites around |
+|---|---|---|---|
+| 1 | **Default `ThreadPoolExecutor`** — every 20 ms output frame goes through `run_in_executor(None, …)`, pool sized `min(32, cpu+4)`, never configured | `transports/asterisk.py` `write_audio` | **low tens** |
+| 2 | **2 OS threads per call**, one waking 50×/s | `transports/audiosocket.py` | tens |
+| 3 | **Per-call Silero VAD load** (~0.4 s ONNX, on the loop), stacks in bursts | `engine/pipecat_engine.py` | tens, in bursts |
+| 4 | **Provider quotas** — one Deepgram key, one Gemini key, limits unknown | shared credentials | unknown — could be first |
+| 5 | **One event loop** — a stall drops calls; it has twice | whole process | any time |
+
+Limits 1 and 3 are cheap fixes that likely move the ceiling several times over,
+so they come *before* concluding a node "only" handles N.
+
+- [x] **A — Operability.** Graceful drain on SIGTERM/SIGINT (refuse → wait
+      `service.drain_timeout_s` → cancel → *then* stop the transport; a second
+      Ctrl+C forces). Startup health. `adapters.md`. The layering invariants made
+      a committed test instead of a claim. Found and fixed [[bugs]] B-012 on the
+      way. [[decisions]] 035–036.
+- [x] **B — Make one call observable.** No new infrastructure; everything below
+      consumes it. `core/logging.py` (console + rotating JSON sink, `call_id`
+      bound through `contextualize`), Asterisk `uniqueid`/`linkedid` captured and
+      exposed via `CallSession.vendor_ids`, recordings keyed by `call_id` with a
+      self-describing header, transcript writes moved **off the event loop**,
+      `frames_dropped` and the new `pacer_slips` surfaced, `tenant_id` threaded
+      through. [[decisions]] 037.
+- [ ] **C — Persist.** PostgreSQL `calls` + `turns`. Writes via a queue and a
+      writer task, never on the loop. A DB outage degrades to log-and-continue,
+      never drops a call.
+- [ ] **D — Control plane.** `aiohttp` (already a dependency): `/health`,
+      `/metrics`, `/calls`, `/pool`, `WS /live`. `PoolStats` already exists and
+      is currently only ever stringified into a log line.
+- [ ] **E — Measure the ceiling.** *Gates F.* Fix limits 1 and 3, build a load
+      harness, ramp until `DROPPED`/`slips` appear. Record CPU and memory per
+      call and N_max. Fill in the provider limits in [[runbook]] §4.
+- [ ] **F — Horizontal scale.** `AgentPool` keeps its interface and gains a Redis
+      backing store; the existing pool tests become the contract. Call
+      distribution and media routing decided from measured numbers, not now.
+- [ ] **G — Recording, analytics, QA.** **Audio recording is gated on privacy
+      work, not engineering** — retention, access policy, lawful basis and caller
+      notification must exist first (§5).
+
+**Deferred out of Stage B, with reason:** live *agent* turns in the .jsonl. The
+recorder sits between STT and the LLM, so it never sees the LLM's output frames;
+moving it depends on whether Pipecat's aggregators forward `TranscriptionFrame`
+downstream, which cannot be settled without a live pipeline. Both sides are
+already captured in `conversation.json`. It belongs in Stage C, where turns go to
+the database with real per-turn timings and can be verified on a real call.
 
 ---
 

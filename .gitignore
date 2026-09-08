@@ -18,6 +18,10 @@ recordings/
 
 # Test run logs
 *.log
+# Structured logs. These hold caller numbers and transcribed speech -- the same
+# personal data as recordings/, so they are just as much not source code.
+logs/
+*.jsonl
 
 # Obsidian per-machine UI state (which panes are open, window geometry).
 # The rest of .obsidian/ IS committed, so vault settings are shared.

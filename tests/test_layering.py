@@ -108,9 +108,15 @@ class LayeringTest(unittest.TestCase):
         # deliberate act that shows up in this list and in review.
         allowed = {
             "__future__", "abc", "asyncio", "dataclasses", "os", "pathlib",
-            "typing", "collections", "enum", "json", "datetime", "signal",
-            "time", "uuid",
+            "sys", "typing", "collections", "enum", "json", "datetime",
+            "signal", "time", "uuid",
             "yaml", "dotenv",   # the config loader's two third-party helpers
+            # loguru is allowed here for core/logging.py, which exists to
+            # CONFIGURE it. It is a logging library, not a telephony vendor or a
+            # conversation engine, so it does not invert the dependency this rule
+            # protects -- but it is listed rather than assumed, because that is
+            # the point of an allow-list.
+            "loguru",
             "core",             # core modules may use each other
         }
         forbidden_hits = []

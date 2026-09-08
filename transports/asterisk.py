@@ -217,6 +217,22 @@ class AsteriskCallSession(CallSession):
             await self.hangup()
 
     @property
+    def vendor_ids(self) -> dict[str, str]:
+        """Asterisk's identifiers, for joining our records to CDR/CEL.
+
+        `linkedid` is the one that survives a transfer, so it is what stitches a
+        call back together once it has been handed to a human on another channel.
+        """
+        if self._ari_call is None:
+            return {}
+        return {
+            "channel_id": self._ari_call.channel_id,
+            "bridge_id": self._ari_call.bridge_id,
+            "uniqueid": self._ari_call.uniqueid,
+            "linkedid": self._ari_call.linkedid,
+        }
+
+    @property
     def can_transfer(self) -> bool:
         return self._controller is not None and self._ari_call is not None
 
@@ -235,10 +251,20 @@ class AsteriskCallSession(CallSession):
         """Frame counters for the closing log line -- the fastest diagnostic we
         have. in=0 means we never heard the caller; real=0 means the agent
         never spoke."""
-        return (
+        base = (
             f"in={self._io.frames_in} out={self._io.frames_out} "
             f"(real={self._io.frames_out_real})"
         )
+        # Appended only when non-zero, so a healthy call's closing line stays
+        # short and anything shown here is worth reading. These are the two
+        # overload signals: dropped inbound frames mean the pipeline could not
+        # keep up with the caller; pacer slips mean our audio reached them late.
+        # Both were counted and discarded before Stage B.
+        if self._io.frames_dropped or self._io.pacer_slips:
+            base += (
+                f" DROPPED={self._io.frames_dropped} slips={self._io.pacer_slips}"
+            )
+        return base
 
 
 class AsteriskTransport(BaseTransport):
