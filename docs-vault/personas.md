@@ -4,7 +4,7 @@ The roster of agents the service can hand to callers. **The roster is the
 capacity**: N simultaneous calls = N personas listed in `config.yaml` under
 `pool.personas`.
 
-Related: [[architecture]], [[decisions]], [[runbook]], [[changelog]], [[flow]].
+Related: [[architecture]], [[decisions]], [[runbook]], [[changelog]], [[flow]], [[roadmap]].
 
 ---
 

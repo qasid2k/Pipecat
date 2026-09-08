@@ -7,7 +7,8 @@ The other notes explain *why* things are the way they are. This one explains
 opening ten files at once. Read this first, then [[architecture]] for the
 layering and [[decisions]] for the reasoning.
 
-Related: [[architecture]], [[decisions]], [[personas]], [[runbook]], [[bugs]].
+Related: [[architecture]], [[decisions]], [[personas]], [[runbook]], [[bugs]],
+[[roadmap]].
 
 ---
 
