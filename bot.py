@@ -115,10 +115,15 @@ async def run_call(
             f"[{session.call_id}] released '{persona.name}' "
             f"({session.end_reason}) | {pool.stats()}"
         )
-        # For Asterisk, hangup() closes the audio path only. It deliberately does
-        # NOT hang up the caller's channel, which after a transfer may be talking
-        # to a human -- see AsteriskCallSession.hangup.
-        await session.hangup()
+        # disconnect(), not hangup(). Reaching here means the conversation is
+        # over from OUR side -- the caller hung up, or the engine finished, or
+        # the idle timeout fired, or a shutdown cancelled us. hangup() alone only
+        # closes our audio path, which is right when the caller ended the call
+        # but abandons them when we did: still connected, hearing silence, their
+        # channel held open and (on Asterisk) still holding a capacity slot.
+        # disconnect() hangs up the caller too, and knows to skip that when they
+        # already left or were transferred to a human.
+        await session.disconnect()
 
 
 def _install_signal_handlers(stop: asyncio.Event, force: asyncio.Event) -> None:

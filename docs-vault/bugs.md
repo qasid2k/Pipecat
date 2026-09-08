@@ -290,3 +290,75 @@ python -c "import time; t=time.monotonic(); import engine.pipecat_engine; print(
 model (~0.4 s) on the loop. That is small, deliberate — a shared VAD across calls
 would break per-call isolation — and it scales with concurrency: N calls arriving
 together stack N × ~0.4 s of loop-blocking. Worth revisiting if N grows.
+
+---
+
+## B-012 — A call the BOT ends abandons the caller and leaks a capacity slot ✅ FIXED
+**Found 2026-09-08 by the Stage A drain checkpoint, fixed the same day.** Not a
+regression from the drain — the drain was simply the first thing that ended a
+call from our side often enough to notice.
+
+**Symptom.** After `Ctrl+C` with a call in progress, the bot exited reporting
+`stopped cleanly | 3/3 free` — and Asterisk still had the caller:
+
+```
+$ asterisk -rx "core show channels"
+PJSIP/101-00000076   6001@testing:4   Up   Stasis(voiceagent)
+1 active channel
+
+$ asterisk -rx "group show channels"
+PJSIP/101-00000076   agents   (default)
+```
+
+The caller was still connected, hearing silence, with nobody on the other end.
+The `agents` group membership was still held, so the dialplan capacity gate had
+**permanently lost one slot** — for the life of that channel, which is until
+somebody notices and clears it by hand.
+
+**Root cause.** `AsteriskCallSession.hangup()` is audio-only *by design*: it runs
+in `run_call`'s `finally`, which also fires after a successful transfer, and at
+that point the channel belongs to the dialplan and may be talking to a human.
+Destroying it there would cut off the transfer ([[decisions]] 006).
+
+The consequence nobody had followed through: **nothing else ever hung up the
+caller's channel.** Every clean end the system had been tested on was a call the
+CALLER ended — they hang up, Asterisk fires StasisEnd, `_teardown` runs. When the
+BOT decides a call is over there is no StasisEnd, no teardown, and no hangup.
+
+So the contract had a verb missing rather than a broken implementation.
+
+**Wider than the drain.** The same abandonment happens on **idle timeout** (30 s
+of silence ends the pipeline) and after an **engine crash**. Both were latent
+before this change and would have produced the same orphan; the drain just made
+it reproducible on demand.
+
+**Fix.** A new `CallSession.disconnect()` (`core/transport.py`), called by
+`run_call`'s `finally` in place of `hangup()`. The rule: *if we ended the call,
+and the caller is still there, and we did not transfer them, hang up on them.*
+
+`AsteriskCallSession.disconnect()` skips three cases, each of which would be a
+bug if it did not:
+
+| Case | Why it is skipped |
+|---|---|
+| caller already hung up (`ended` set) | their channel is gone; a DELETE would 404 |
+| transferred | the channel is the dialplan's now, possibly mid-call with a human |
+| no ARI (direct call to 6000) | there is no channel to act on |
+
+`_transferred` is a separate flag rather than an inference from `ended`, because
+a transfer sets `ended` only once StasisEnd comes back — which can be *after* we
+are already tearing down. It is set **before** the ARI call, not after: if
+`continue` lands and the await is then cancelled, the channel has already gone to
+the dialplan. Wrongly leaving a channel alone is recoverable; wrongly hanging up
+on a caller being connected to a human is not.
+
+`disconnect()` never raises — it runs in a `finally`, often during shutdown,
+where a second exception would replace the real one.
+
+8 tests in `tests/test_disconnect.py`, including that a transferred call is still
+never touched.
+
+**Check for it:** after any bot-initiated end, `asterisk -rx "core show channels"`
+and `asterisk -rx "group show channels"` must both come back empty. The bot's own
+`stopped cleanly | N/N free` line is **not** sufficient evidence — it was printing
+exactly that while the channel was still up.

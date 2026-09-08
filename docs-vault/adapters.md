@@ -66,8 +66,30 @@ capacity can be refused (see Capacity, below).
 | `async read_audio()` | Next frame of caller audio, or **`None` exactly once** when the call has ended. That `None` is the sentinel the engine's read loop stops on. |
 | `async write_audio(pcm)` | Send one frame of agent audio. **May block asynchronously** — that back-pressure is what paces speech to real time. |
 | `async transfer(dest)` | Hand the call to `dest`. Returns `True` if *initiated*, not if a human answered. |
-| `async hangup()` | Release this call's resources. **Must be safe to call twice.** |
+| `async hangup()` | Release **our** resources. **Must be safe to call twice.** |
+| `async disconnect()` | End the call **for the caller too**. Override this if your vendor has call control. |
 | `can_transfer` | Whether `transfer()` can work on this call, known up front. |
+
+**`hangup()` vs `disconnect()` — get this wrong and you abandon callers.** The
+difference is *who decided the call was over*:
+
+* `hangup()` releases our side only. It is right when the **caller** ended the
+  call, and after a **transfer**, where the call now belongs to a human and
+  destroying it would cut off the very handover you just made.
+* `disconnect()` is for when **we** end it — a shutdown drain, an idle timeout,
+  an engine that died. The caller is still on the line expecting someone to be
+  there, so something has to hang up on them.
+
+The default `disconnect()` just calls `hangup()`, which is correct only for a
+vendor with no call control. Asterisk's override hangs up the caller's channel
+unless the caller already left, the call was transferred, or there is no ARI
+channel to act on. Skipping it left a real caller connected to silence with a
+capacity slot held open — [[bugs]] B-012.
+
+Track "did I transfer?" with an explicit flag, set **before** the vendor call.
+Do not infer it from the call having ended: the end event can arrive after you
+are already tearing down, and wrongly hanging up on a caller being connected to
+a human is the one mistake here that is not recoverable.
 
 ---
 
@@ -171,6 +193,10 @@ Before calling an adapter done:
 - [ ] `read_audio()` returns `None` exactly once at end of call
 - [ ] `write_audio()` applies back-pressure or paces itself
 - [ ] `hangup()` is idempotent and cannot kill a transferred call
+- [ ] `disconnect()` actually ends the call for the caller, and skips doing so
+      when they already left or were transferred ([[bugs]] B-012)
+- [ ] After a bot-initiated end (shutdown, idle timeout), the vendor shows **no
+      leftover channel** — the app's own "stopped cleanly" log is not evidence
 - [ ] `can_transfer` is honest — the agent tells the caller the truth up front
 - [ ] `reject()` does something the caller can understand
 - [ ] `stop()` is idempotent and releases everything

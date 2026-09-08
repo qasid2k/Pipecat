@@ -94,6 +94,13 @@ class AsteriskCallSession(CallSession):
         self._ari_call = ari_call
         self._transfer_context = transfer_context
 
+        # Set once a transfer has been handed to the dialplan. After that the
+        # channel is someone else's -- possibly mid-conversation with a human --
+        # so `disconnect()` must never hang it up. We cannot infer this from
+        # `ended`: a transfer sets that too, but only once StasisEnd comes back,
+        # which can be after we are already tearing down.
+        self._transferred = False
+
         # call_id is the AudioSocket UUID -- the same value ARI passed as the
         # External Media `data` field, which is what correlated this connection
         # to its channel. A direct call has no UUID, so fall back to the peer
@@ -138,6 +145,12 @@ class AsteriskCallSession(CallSession):
                 "no ARI channel (direct AudioSocket call) -- ignoring"
             )
             return False
+        # Marked BEFORE the call, not after: if `continue` succeeds and then the
+        # await is cancelled (a shutdown landing at exactly the wrong moment),
+        # the channel is already gone to the dialplan. Better to wrongly believe
+        # we transferred and leave a channel alone than to hang up a caller who
+        # is being connected to a human.
+        self._transferred = True
         await self._controller.transfer(
             self._ari_call.channel_id,
             context=self._transfer_context,
@@ -158,6 +171,50 @@ class AsteriskCallSession(CallSession):
         ARI StasisEnd handler, which fires whichever way the call ends.
         """
         self._io.stop()
+
+    async def disconnect(self) -> None:
+        """We are ending this call, so hang up on the caller as well.
+
+        Runs when the bot decided the call was over -- a shutdown drain, an idle
+        timeout, an engine that died -- as opposed to the caller hanging up.
+
+        Three cases are deliberately skipped, and each would be a bug if it
+        were not:
+
+          * **already ended** -- the caller hung up first; their channel is gone
+            and a DELETE would just 404.
+          * **transferred** -- the channel belongs to the dialplan now and may be
+            mid-conversation with a human. Hanging it up would cut off the very
+            call we just connected.
+          * **no ARI** -- a direct AudioSocket call (6000) has no channel to act
+            on. Closing the audio path is all there is.
+
+        Otherwise: hang up the caller's channel. Leaving it is not neutral. The
+        caller sits connected to silence, and on Asterisk the channel keeps its
+        `agents` group membership, so the pool loses one slot of real capacity
+        for as long as that channel lives -- which is until someone notices.
+
+        StasisEnd then fires as it would for any hangup, so the ARI controller
+        tears the bridge and media channel down through its normal path.
+        """
+        try:
+            if (
+                self._controller is not None
+                and self._ari_call is not None
+                and not self._transferred
+                and not self.ended.is_set()
+            ):
+                logger.info(
+                    f"disconnecting caller on {self.call_id} "
+                    f"(channel {self._ari_call.channel_id})"
+                )
+                await self._controller.hangup(self._ari_call.channel_id)
+        except Exception as e:
+            # Never raise: this runs in a `finally`, frequently while shutting
+            # down. A vendor error here must not stop the audio path closing.
+            logger.warning(f"could not hang up caller on {self.call_id}: {e}")
+        finally:
+            await self.hangup()
 
     @property
     def can_transfer(self) -> bool:

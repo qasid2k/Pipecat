@@ -105,6 +105,31 @@ class CallSession(ABC):
         destroy a call we have already handed to someone else.
         """
 
+    async def disconnect(self) -> None:
+        """End the call **for the caller too**, not just on our side.
+
+        The difference from `hangup()` is who decided the call was over:
+
+          * `hangup()` releases OUR resources and nothing else. It is what runs
+            when the CALLER ended the call, or after a transfer handed them to a
+            human -- in both cases the caller's channel is not ours to touch.
+          * `disconnect()` is for when WE end the call: a shutdown drain, an idle
+            timeout, an engine that died. The caller is still on the line
+            expecting someone to be there, so somebody has to actually hang up
+            on them.
+
+        Without this the caller is abandoned: still connected, hearing silence,
+        with their channel held open on the vendor's side forever. On Asterisk
+        that channel also keeps its capacity slot, so the pool permanently loses
+        one agent's worth of capacity per abandoned call.
+
+        MUST be safe to call twice, MUST be safe when the caller has already
+        hung up, and MUST NOT end a call that was transferred away. The default
+        implementation just releases our side; an adapter with call control
+        should override it.
+        """
+        await self.hangup()
+
     @property
     def can_transfer(self) -> bool:
         """Whether transfer() can work on this call, known up front.

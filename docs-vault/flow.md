@@ -301,10 +301,21 @@ Any of these ends a call, and all of them converge on the same `finally`:
 engine.run() returns
       |
       +- pool.release(persona)   -> "released 'Sarah' | 3/3 free"
-      +- session.hangup()        -> stop the I/O threads (audio only)
+      +- session.disconnect()
+             |
+             +- did WE end this call, and is the caller still there, and
+             |  did we not transfer them?  -> ARI hangup on their channel
+             +- then hangup() -> stop the I/O threads (audio only)
 
 meanwhile, ARI StasisEnd -> _teardown(): destroy the bridge and media channel
 ```
+
+`disconnect()` rather than `hangup()` is load-bearing. `hangup()` closes our
+audio path and nothing else — correct when the *caller* hung up, and essential
+after a transfer, where the channel now belongs to a human. But when the **bot**
+ends a call (shutdown, idle timeout, engine crash) there is no StasisEnd and no
+teardown, so without `disconnect()` the caller is left connected to silence with
+their channel — and its capacity slot — held open ([[bugs]] B-012).
 
 **The invariant to watch in the logs:** after every call ends, the count returns
 to `N/N free`. If it does not, an agent leaked and capacity has silently dropped.
