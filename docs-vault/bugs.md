@@ -294,9 +294,10 @@ together stack N × ~0.4 s of loop-blocking. Worth revisiting if N grows.
 ---
 
 ## B-012 — A call the BOT ends abandons the caller and leaks a capacity slot ✅ FIXED
-**Found 2026-09-08 by the Stage A drain checkpoint, fixed the same day.** Not a
-regression from the drain — the drain was simply the first thing that ended a
-call from our side often enough to notice.
+**Found 2026-09-08 by the Stage A drain checkpoint, fixed and verified live the
+same day** — after a mid-call `SIGTERM`, both `core show channels` and
+`group show channels` came back empty. Not a regression from the drain: the drain
+was simply the first thing that ended a call from our side often enough to notice.
 
 **Symptom.** After `Ctrl+C` with a call in progress, the bot exited reporting
 `stopped cleanly | 3/3 free` — and Asterisk still had the caller:

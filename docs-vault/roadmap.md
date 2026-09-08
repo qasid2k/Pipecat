@@ -91,10 +91,10 @@ a caller.
 |---|---|---|
 | 1 | **Provider concurrency limits are unknown.** The table in [[runbook]] §4 is deliberately blank rather than guessed. All personas share one Deepgram key and one Gemini key, so N calls = N concurrent streams on each. | Exceeding them looks exactly like a code bug: some calls answer, others die on connect, and nothing in this repo is at fault. Academic at N=3; real in the tens. |
 | 2 | **Are `aura-2-thalia-en` and `aura-2-orion-en` real Deepgram voices?** Never verified against the account. | A typo surfaces as a TTS failure on that persona's first call, not at startup ([[personas]]). |
-| 3 | **Phase 4 dialplan results unconfirmed** — the busy message, and the slot release on all three exit paths (normal / transferred / caller-dropped). | A slot that is not freed reduces capacity permanently and silently. |
+| 3 | **Phase 4 dialplan — partly confirmed.** The `GROUP` gate is live and working: a call in progress was observed holding `agents`, and the group cleared afterwards. **Still unconfirmed: the spoken busy message, and the transferred and caller-dropped exit paths.** | A slot that is not freed reduces capacity permanently and silently. |
 | 4 | **The `released 'Daniel'` line was never confirmed** in the log where his call was torn down while the pipeline was still cancelling. Probably fine; unproven. | If it is not there, an agent leaked. |
 | 5 | **No tested ceiling for N**, and no CPU/memory figures per call. | Raising N is currently a guess. Phase 5 item. |
-| 6 | **The layering invariants have no committed checker** despite being described as machine-checked. | The claim is currently unbacked. Phase 5 item. |
+| ~~6~~ | ~~The layering invariants have no committed checker.~~ **Closed 2026-09-08** — `tests/test_layering.py` enforces them on every run ([[decisions]] 036). | — |
 | 7 | **The Asterisk configuration exists only on the VM** — dialplan, `ari.conf`, `http.conf`, PJSIP endpoints. Everything else is in git; this is not. | If the VM is lost, the `[transfer]` context and the capacity gate go with it. See §5. |
 | 8 | **Each call loads its own Silero VAD model** (~0.4 s, on the event loop). Deliberate — a shared VAD would break per-call isolation — but it stacks: N calls arriving together stack N × ~0.4 s of blocking. | Fine at N=3. Worth revisiting before N grows. See [[bugs]] B-011. |
 
