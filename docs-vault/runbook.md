@@ -470,6 +470,28 @@ The file rotates at `service.log.rotation` and is deleted after
 the same personal data as `recordings/`, and it is git-ignored for the same
 reason. See the retention note in [[roadmap]] §5.
 
+### Our records vs Asterisk's CDR
+
+Both exist and neither is a superset ([[decisions]] 041). `uniqueid` joins them.
+
+| Question | Ask |
+|---|---|
+| Which agent took this call, why did it end, was it transferred | **our `calls` table** |
+| Was it answered, how long was it billable, who dialled | **CDR** — authoritative |
+| **How many callers hit the busy message** | **CDR only** — they never reach the app |
+| What was said | our `turns` table / `recordings/` |
+
+CDR here uses the `csv` backend (`/var/log/asterisk/cdr-csv/Master.csv`), so it
+is an archive rather than something to query routinely — and it is rotated.
+`Adaptive ODBC` is registered but unused; pointing it at the same database as our
+records is the natural move once Stage F introduces Postgres, and would make the
+join native.
+
+```bash
+asterisk -rx "cdr show status"                          # is it even on
+grep Playback /var/log/asterisk/cdr-csv/Master.csv | grep -c busy   # turned-away callers
+```
+
 ### Signals that something is wrong
 
 | In a log line | Means |

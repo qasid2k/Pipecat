@@ -982,3 +982,56 @@ failure is visible rather than inferred; surfacing them on `/metrics` is Stage
 D's job. `close()` drains rather than cancels, because at shutdown the queue
 holds the calls that just ended. `core/records.py` takes its logger by injection
 rather than importing one, so the contract stays free of the logging setup.
+
+---
+
+## 041 — Our call records do not replace Asterisk's CDR, and cannot
+*Date: 2026-09-09*
+
+**Decision.** Keep both. `calls` records what happened *inside* a call; CDR
+records every call *attempt*. `uniqueid` is the bridge. For telephony truth —
+did it connect, how long was it billable, who dialled — **CDR is authoritative
+and our row is a worse copy.**
+
+**Why the question came up.** Asterisk already writes CDR, so a second per-call
+table looks like duplication. It is, partly — and the overlap is worth being
+explicit about rather than discovering later when two numbers disagree.
+
+**What only CDR has.** `answer` time, `billsec`, `disposition`, and — the one
+that matters most — **every call we never saw**. A caller rejected by the
+dialplan capacity gate hears the busy message and hangs up without ever entering
+Stasis, so `run_call` never runs and no row of ours exists. As far as our
+database is concerned that caller did not happen.
+
+That is not a small gap. [[roadmap]] §3 says the trigger for building a queue is
+"callers regularly hit the busy message" — and **that is measurable only from
+CDR**. On this install (csv backend, `Log unanswered calls: Yes`):
+
+```bash
+grep Playback /var/log/asterisk/cdr-csv/Master.csv | grep -c busy
+```
+
+**What only we have.** Which persona answered, their voice and model, why the
+call ended in our terms (`cause`), whether the LLM chose to transfer and to
+which department, `frames_dropped` / `pacer_slips`, `tenant_id`, `node_id`, and
+the transcripts. None of it exists anywhere in Asterisk, because all of it is
+above the telephony layer. CDR shows a Dial to `PJSIP/102`; it cannot tell you
+the LLM decided "billing" — and three departments dial that same endpoint here,
+so the destination is genuinely ambiguous from CDR alone.
+
+**Why we still duplicate `duration_s` and `caller_id`.** Two reasons that
+outweigh the redundancy:
+
+1. **`CallRecord` is written by `run_call`, which is transport-neutral.** A
+   record that leaned on CDR would leave a Twilio call with no record at all,
+   and the `BaseTransport` seam would have leaked into the data layer.
+2. **CDR here is a CSV file.** `Master.csv` has no indexes and is eventually
+   rotated away; it is a fine archive and a poor lookup table. Routine questions
+   should not require parsing it.
+
+**Consequences.** The two can disagree; when they do, CDR wins for billing and
+connection facts. `Adaptive ODBC` is already a registered backend on this
+install, so the better long-term arrangement is to point Asterisk's CDR at the
+same database once Stage F introduces Postgres — then `JOIN calls USING
+(uniqueid)` is native and the duplicated columns can be reconsidered on evidence
+rather than argument. Not worth doing while CDR is CSV and our store is SQLite.
