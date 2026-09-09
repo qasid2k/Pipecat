@@ -109,7 +109,7 @@ class LayeringTest(unittest.TestCase):
         allowed = {
             "__future__", "abc", "asyncio", "dataclasses", "os", "pathlib",
             "sys", "typing", "collections", "enum", "json", "datetime",
-            "signal", "time", "uuid",
+            "signal", "socket", "time", "uuid",
             "yaml", "dotenv",   # the config loader's two third-party helpers
             # loguru is allowed here for core/logging.py, which exists to
             # CONFIGURE it. It is a logging library, not a telephony vendor or a

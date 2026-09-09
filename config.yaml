@@ -184,3 +184,21 @@ service:
     # eventually fills the disk and takes Asterisk down with it.
     rotation: 50 MB
     retention: 14 days
+
+  # One queryable row per call, plus one per utterance. This is what answers
+  # "how many calls did Daniel take", "how often did we transfer to billing",
+  # "what is the average handle time" -- questions no amount of grepping a log
+  # answers well.
+  #
+  # Writing is asynchronous and fails soft BY DESIGN: a record is evidence, the
+  # caller is real. If the store is slow, full or down, records are dropped with
+  # a warning and the call carries on.
+  records:
+    enabled: true
+    # sqlite today. It needs no server and no extra dependency, which is what
+    # made it verifiable now. Postgres becomes a second backend behind the same
+    # interface when there is an instance to test against -- see decisions 039.
+    backend: sqlite
+    # Relative to this file. Contains caller numbers and transcribed speech, so
+    # it is git-ignored and needs the same retention policy as recordings/.
+    path: records/calls.db

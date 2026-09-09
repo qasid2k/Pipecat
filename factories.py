@@ -14,8 +14,11 @@ and asyncio.) The factory sits above the layers instead, next to bot.py, which
 is the one place allowed to know what is actually being run.
 """
 
+from pathlib import Path
+
 from core.config import AppConfig, ConfigError, PoolPersona, config_for_persona
 from core.engine import Engine
+from core.records import CallStore, NullCallStore
 from core.transport import BaseTransport
 
 
@@ -62,6 +65,33 @@ def create_engine(config: AppConfig) -> Engine:
     raise ConfigError(
         f"engine.provider: '{provider}' is not implemented. "
         "Valid options are: ['pipecat']"
+    )
+
+
+def create_call_store(config: AppConfig) -> CallStore:
+    """Build the call-record store named by service.records.backend.
+
+    Returns a NullCallStore when records are switched off, rather than None, so
+    no caller has to branch on whether recording is enabled -- a branch repeated
+    at five call sites is one that gets forgotten at the sixth.
+    """
+    records = config.service.records
+    if not records.enabled:
+        return NullCallStore()
+
+    if records.backend == "sqlite":
+        # Lazily imported like every other implementation, so an unused backend's
+        # dependencies never have to be installed.
+        from stores.sqlite_store import SqliteCallStore
+
+        path = Path(records.path)
+        if not path.is_absolute() and config.source is not None:
+            path = config.source.parent / path
+        return SqliteCallStore(path)
+
+    raise ConfigError(
+        f"service.records.backend: '{records.backend}' is not implemented. "
+        "Valid options are: ['sqlite']"
     )
 
 

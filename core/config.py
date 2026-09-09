@@ -540,6 +540,32 @@ class LogConfig:
 
 
 @dataclass(frozen=True)
+class RecordsConfig:
+    """Where per-call records go. `enabled: false` keeps the whole path inert."""
+
+    enabled: bool = True
+    backend: str = "sqlite"
+    path: str = "records/calls.db"
+
+
+VALID_RECORD_BACKENDS = {"sqlite"}
+
+
+def _load_records(data) -> RecordsConfig:
+    path = "service.records"
+    d = _section(data, path, allowed={"enabled", "backend", "path"})
+    defaults = RecordsConfig()
+    return RecordsConfig(
+        enabled=bool(d.get("enabled", defaults.enabled)),
+        backend=_choice(
+            d.get("backend", defaults.backend), f"{path}.backend",
+            VALID_RECORD_BACKENDS,
+        ),
+        path=str(d.get("path", defaults.path)),
+    )
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     """Operational settings: nothing here changes what a caller hears."""
 
@@ -556,6 +582,7 @@ class ServiceConfig:
     tenant_id: str = "default"
 
     log: LogConfig = field(default_factory=LogConfig)
+    records: RecordsConfig = field(default_factory=RecordsConfig)
 
 
 VALID_LOG_LEVELS = {"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"}
@@ -582,7 +609,9 @@ def _load_log(data) -> LogConfig:
 
 def _load_service(data) -> ServiceConfig:
     path = "service"
-    d = _section(data, path, allowed={"drain_timeout_s", "tenant_id", "log"})
+    d = _section(
+        data, path, allowed={"drain_timeout_s", "tenant_id", "log", "records"}
+    )
     defaults = ServiceConfig()
     timeout = _number(
         d.get("drain_timeout_s", defaults.drain_timeout_s), f"{path}.drain_timeout_s"
@@ -599,6 +628,7 @@ def _load_service(data) -> ServiceConfig:
         drain_timeout_s=timeout,
         tenant_id=tenant.strip(),
         log=_load_log(d.get("log", {})),
+        records=_load_records(d.get("records", {})),
     )
 
 

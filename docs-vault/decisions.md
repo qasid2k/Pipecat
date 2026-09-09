@@ -907,3 +907,78 @@ load test that was meant to find the limit reports a number that is too high.
 stays short and anything appearing there is worth reading. They are per-call
 counters, not process-wide — aggregating them is Stage D's job, once there is
 somewhere to aggregate into.
+
+---
+
+## 039 — Call records go to SQLite first, not Postgres (SUPERSEDES the plan's choice)
+*Date: 2026-09-09*
+
+**Decision.** `CallStore` is an interface; the shipped implementation is stdlib
+`sqlite3`. Postgres becomes a second implementation behind the same interface
+when there is an instance to verify it against.
+
+**Why this reverses the plan.** The call-centre plan named PostgreSQL, reasoning
+that Stage F needs concurrent writers from several nodes and that switching later
+costs a migration. That reasoning is still right *for Stage F*. It was written
+before checking whether a Postgres instance existed to develop against — and
+there is none, on the VM or the laptop.
+
+Writing `asyncpg` code that has never been run, against a database that does not
+exist, and landing it in a service that answers real calls, is exactly the
+mistake [[decisions]] 025 was written about: unverifiable code proves nothing
+while still costing maintenance. That entry deferred a whole phase on this
+principle; applying it to a database and not to a transport would be arbitrary.
+
+**What it buys.** Real persistence and real queries now, on the single node this
+service actually is, with the *schema*, the *record shapes* and the *writer*
+settled and tested before the driver question matters. Those are the parts that
+would be expensive to get wrong; the driver is the cheap part.
+
+**What it costs.** SQLite takes one writer at a time. Fine here — writes are a
+handful per call and already funnel through a single writer task — but it is not
+the answer for Stage F. The migration when it comes is two `CREATE TABLE`s and a
+row copy, plus one new file implementing the same four methods. Placeholders and
+a couple of DDL keywords differ; nothing above the store changes.
+
+**Consequences.** `service.records.backend` is a config choice with one valid
+value today, so adding Postgres is additive rather than a rewrite. WAL mode plus
+`synchronous=NORMAL` means a crash can lose the last few records — the right
+trade for evidence, and it keeps the writer off the disk's critical path. The
+database holds caller numbers and transcribed speech, so it is git-ignored and
+inherits the retention gap already recorded for `recordings/` and `logs/`.
+
+---
+
+## 040 — The record path fails soft, always
+*Date: 2026-09-09*
+
+**Decision.** `RecordWriter.submit()` is synchronous, non-blocking and never
+raises. Records go on a **bounded** queue that a single background task drains.
+A full queue drops records with a warning. A store error is logged and the writer
+keeps going. Records disabled is a `NullCallStore`, not a `None`.
+
+**Why, in one line.** A record is evidence; the caller is real. Losing a row is
+bad, dropping a call because a database was slow is worse.
+
+Each part earns its place against a specific failure:
+
+* **Non-blocking submit.** Awaiting the store from `run_call` would make a
+  database problem into a telephony problem — a slow disk would show up as dead
+  air. It also puts I/O on the event loop, which is what dropped calls in
+  [[bugs]] B-001 and B-011.
+* **Bounded queue.** If records are produced faster than the store accepts them,
+  the options are: block (slow down calls), grow without limit (kill the process
+  eventually), or drop and say so. Only the third fails in a direction the caller
+  never notices. The drop is logged at WARNING because it means the analytics
+  built on these rows are now quietly incomplete.
+* **Errors swallowed in the drain loop.** If the writer task died on the first
+  bad row, recording would stop silently for the life of the process — much
+  worse than losing one row, and undetectable until someone went looking.
+* **A null store rather than a null check.** Otherwise every call site has to ask
+  whether recording is enabled, and the fifth one added will forget.
+
+**Consequences.** Dropped and failed counts are tracked in `WriterStats` so the
+failure is visible rather than inferred; surfacing them on `/metrics` is Stage
+D's job. `close()` drains rather than cancels, because at shutdown the queue
+holds the calls that just ended. `core/records.py` takes its logger by injection
+rather than importing one, so the contract stays free of the logging setup.

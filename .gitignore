@@ -22,6 +22,12 @@ recordings/
 # personal data as recordings/, so they are just as much not source code.
 logs/
 *.jsonl
+# Call records. Caller numbers, transcripts, and every call's metadata -- the
+# most sensitive artifact this service produces. (-wal/-shm are SQLite's.)
+records/
+*.db
+*.db-wal
+*.db-shm
 
 # Obsidian per-machine UI state (which panes are open, window geometry).
 # The rest of .obsidian/ IS committed, so vault settings are shared.
