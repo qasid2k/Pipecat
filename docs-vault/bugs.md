@@ -363,3 +363,55 @@ never touched.
 and `asterisk -rx "group show channels"` must both come back empty. The bot's own
 `stopped cleanly | N/N free` line is **not** sufficient evidence — it was printing
 exactly that while the channel was still up.
+
+---
+
+## B-013 — Restarting could fail with EADDRINUSE on Linux ✅ FIXED
+**Observed 2026-09-09, fixed the same day.**
+
+**Symptom.** `python bot.py` dies at startup:
+
+```
+File "transports/asterisk.py", line 403, in _make_listen_socket
+    sock.bind((self._host, self._port))
+OSError: [Errno 98] Address already in use
+```
+
+**Root cause.** Two possible ones, and the raw errno distinguishes neither:
+
+1. **Another bot is still running** and holding 8090. By far the likelier, and
+   the fix is to stop it.
+2. **The previous run's sockets are in TIME_WAIT.** No process is listening, and
+   waiting ~60 s would clear it — but nothing said so.
+
+Cause 2 was ours. `SO_REUSEADDR` was never set, on any platform. The comment said
+*"do NOT set SO_REUSEADDR on Windows — it raises WinError 10013 on bind"*
+([[bugs]] B-003), which is correct, but **"off on Windows" had been implemented as
+"off everywhere"** — including the Linux VM that actually runs the service. On
+Linux that is precisely the option that lets a listener rebind over TIME_WAIT, so
+every restart was a coin flip against the previous run's connections.
+
+It went unnoticed for as long as it did because restarts used to be rare. Stage
+A added a graceful drain and made them routine.
+
+**Fix.** Set `SO_REUSEADDR` on POSIX and never on Windows — honouring B-003
+rather than reversing it. Plus a bind error that names both causes and the
+command to tell them apart, since they need opposite responses.
+
+**What this does NOT do.** `SO_REUSEADDR` is not `SO_REUSEPORT`: two live
+processes still cannot share the port. A second bot fails to bind, loudly, which
+is what should happen — it is the likelier cause and the one worth being told
+about. Verified by test, not assumed.
+
+**Diagnosing it:**
+
+```bash
+ss -lptn 'sport = :8090'     # who holds it
+pgrep -af bot.py             # is another bot running
+```
+
+5 tests in `tests/test_listen_socket.py` cover both platform branches (the
+POSIX one via a patched `sys.platform`, since development is on Windows), that a
+second bind still fails, that the error explains both causes, and that
+`SO_RCVBUF` is still set before bind — B-001's fix living in the same function
+and equally easy to break by tidying.

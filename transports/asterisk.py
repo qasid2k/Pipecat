@@ -53,6 +53,7 @@ Verified against pipecat-ai 1.6.0 (this module itself imports no Pipecat).
 
 import asyncio
 import socket
+import sys
 import threading
 from typing import AsyncIterator
 
@@ -397,10 +398,41 @@ class AsteriskTransport(BaseTransport):
         large window from its very first packet.
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # NOTE: do NOT set SO_REUSEADDR on Windows -- it raises WinError 10013
-        # on bind. asyncio itself skips it on Windows for the same reason.
+
+        # SO_REUSEADDR on POSIX, never on Windows.
+        #
+        # Windows: it means something different and hostile there, and setting it
+        # raises WinError 10013 on bind ([[bugs]] B-003). asyncio skips it on
+        # Windows for the same reason. That is why it was originally left off --
+        # but "off on Windows" was implemented as "off everywhere", which cost us
+        # on the platform that actually runs the service.
+        #
+        # Linux: without it, restarting the bot fails with EADDRINUSE while the
+        # previous run's connections sit in TIME_WAIT, even though no process is
+        # listening. That turns every restart into a coin flip, which matters a
+        # great deal more now that there is a drain and restarts are routine.
+        #
+        # It does NOT let two live processes share the port -- that is
+        # SO_REUSEPORT. So a second bot still fails to bind, loudly, which is the
+        # far more likely cause of EADDRINUSE and the one worth being told about.
+        if sys.platform != "win32":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECV_BUFFER_BYTES)
-        sock.bind((self._host, self._port))
+        try:
+            sock.bind((self._host, self._port))
+        except OSError as e:
+            sock.close()
+            # The raw errno tells you nothing about which of the two causes it is,
+            # and they need opposite responses.
+            raise OSError(
+                f"cannot bind {self._host}:{self._port} -- {e}\n"
+                "  Either another bot is already running (check: "
+                "ss -lptn 'sport = :{port}'  /  pgrep -af bot.py), in which case "
+                "stop it;\n"
+                "  or the previous run left sockets in TIME_WAIT, in which case "
+                "waiting ~60s clears it.".replace("{port}", str(self._port))
+            ) from e
         return sock
 
     # -- per-call intake ---------------------------------------------------
