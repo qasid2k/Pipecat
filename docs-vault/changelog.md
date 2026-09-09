@@ -6,6 +6,32 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-09 — Stage C: every call leaves a queryable row
+Logs answer "what happened on this call". Records answer "how many calls did
+Daniel take, how often did we transfer to billing, what is the average handle
+time" — questions no amount of grepping answers well.
+
+* **`calls` + `turns`**, in SQLite. **Not Postgres**, and deliberately: there is
+  no instance to verify against, and unverifiable persistence in a service that
+  answers real calls is what [[decisions]] 025 exists to prevent. The store is
+  behind a `CallStore` interface, so Postgres becomes a sibling file rather than
+  a rewrite ([[decisions]] 039).
+* **The write path fails soft, everywhere** ([[decisions]] 040). `submit()` is
+  non-blocking and never raises; the queue is bounded and drops with a warning
+  rather than slowing a call or growing until the process dies; a store error is
+  logged and the writer carries on. A record is evidence; the caller is real.
+* **`Engine.run()` now returns an `EngineResult`** ([[decisions]] 042) — cause,
+  transfer destination, transcript paths. Three parties know different parts of
+  a call and only `run_call` owns its lifecycle, so it assembles the row; making
+  the engine write it would mean every future engine knew about stores.
+* **A crashed engine still gets a row**, with `cause = "engine failed before it
+  could report"`.
+* `tools/check_store.py` exercises the whole path without a phone call.
+
+89 tests (up from 73). Not live-verified.
+
+---
+
 ## 2026-09-08 — Stage B: one call can now be reconstructed afterwards
 No new infrastructure — this is the foundation the database, the dashboard and QA
 scoring all read. Doing it after the database would have meant persisting

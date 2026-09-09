@@ -510,19 +510,48 @@ appearing there is worth chasing and is what should stop a load test.
 drifted apart — the dialplan should have caught that caller first and played the
 busy message. Check `Pool: capacity N` at startup against the dialplan's cap.
 
-### Checking the record store (no phone needed)
+### What a finished call now writes
 
-The store is not wired into the call path yet, so **no phone call exercises it**.
-This does, using the real config, factory, writer and store:
+| Artifact | Where | When |
+|---|---|---|
+| a `calls` row | `records/calls.db` | in `run_call`'s `finally`, once the call is definitively over |
+| `turns` rows | same | one per caller utterance, as it happens |
+| `<call_id>-…-transcript.jsonl` | `recordings/` | live, one line per utterance |
+| `<call_id>-…-conversation.json` | `recordings/` | at the end, both sides |
+| log lines | console + `logs/agent.jsonl` | throughout, keyed by `call_id` |
+
+Query them:
+
+```bash
+sqlite3 records/calls.db \
+  "SELECT started_at, persona, caller_id, ROUND(duration_s) s, transferred_to,
+          frames_dropped, pacer_slips FROM calls ORDER BY started_at DESC LIMIT 10"
+
+sqlite3 records/calls.db \
+  "SELECT persona, COUNT(*) calls, ROUND(AVG(duration_s),1) avg_s FROM calls
+   GROUP BY persona"
+```
+
+No `sqlite3` binary on the box? `python -c "import sqlite3; …"` works the same.
+
+**A row is written even when the engine crashed** — `cause` then reads
+"engine failed before it could report". A call that failed is worth a record more
+than one that went fine, not less.
+
+**A caller rejected at capacity gets no row**, because they were never served.
+Counting turned-away callers is a CDR question ([[decisions]] 041).
+
+### Checking the record store without a phone
 
 ```bash
 python tools/check_store.py
 ```
 
-It writes one call plus two turns the way `run_call` will, reads them back with a
-plain query, runs the three analytics queries the table exists for, and deletes
-its own rows. Re-run it after any backend change — the point of the `CallStore`
-interface is that this script should not have to change.
+Uses the real config, factory, writer and store: writes one call plus two turns
+the way `run_call` does, reads them back with a plain query, runs the analytics
+queries, and deletes its own rows. Safe against the live database. Re-run it
+after any backend change — the point of the `CallStore` interface is that this
+script should not have to change.
 
 ### Automated tests (no phone needed)
 

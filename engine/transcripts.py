@@ -31,6 +31,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -40,6 +41,8 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+from core.records import TurnRecord
 
 
 def _now() -> str:
@@ -61,7 +64,12 @@ class TranscriptRecorder(FrameProcessor):
     push_frame() or the pipeline stalls behind you.
     """
 
-    def __init__(self, path: Path, call: dict | None = None):
+    def __init__(
+        self,
+        path: Path,
+        call: dict | None = None,
+        on_turn: Callable[[TurnRecord], None] | None = None,
+    ):
         super().__init__()
         self._path = path
         # Written as the first line, so the file says what call it belongs to
@@ -70,6 +78,16 @@ class TranscriptRecorder(FrameProcessor):
         self._queue: asyncio.Queue = asyncio.Queue()
         self._writer_task: asyncio.Task | None = None
         self._turn = 0
+        # Called for each utterance, with the record ready to store. A callback
+        # rather than the store itself: this class writes a file, and giving it
+        # a database would make a transcript depend on a database being up.
+        self._on_turn = on_turn
+        self._call_id = str((call or {}).get("call_id") or "")
+
+    @property
+    def turns(self) -> int:
+        """How many caller utterances were recorded."""
+        return self._turn
 
     # -- the write path ----------------------------------------------------
     def _start_writer(self):
@@ -98,6 +116,30 @@ class TranscriptRecorder(FrameProcessor):
                     logger.warning(f"could not write transcript line: {e}")
         except asyncio.CancelledError:
             raise
+
+    def _emit_turn(self, text: str, language: str | None) -> None:
+        """Hand the utterance to whoever wants to store it.
+
+        Wrapped because this callback reaches a database: a store that is down
+        must cost a row, never the transcript file and never the call. The file
+        write above has already happened by the time we get here, so the local
+        record survives regardless.
+        """
+        if self._on_turn is None or not self._call_id:
+            return
+        try:
+            self._on_turn(
+                TurnRecord(
+                    call_id=self._call_id,
+                    seq=self._turn,
+                    at=datetime.now(timezone.utc),
+                    speaker="caller",
+                    text=text,
+                    language=language,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"could not record turn {self._turn}: {e}")
 
     def _write_line(self, record: dict):
         with self._path.open("a", encoding="utf-8") as f:
@@ -133,17 +175,20 @@ class TranscriptRecorder(FrameProcessor):
 
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
             self._turn += 1
+            text = frame.text.strip()
+            language = str(frame.language) if frame.language else None
             self._append(
                 {
                     "type": "turn",
                     "seq": self._turn,
                     "at": _now(),
                     "speaker": "caller",
-                    "text": frame.text.strip(),
-                    "language": str(frame.language) if frame.language else None,
+                    "text": text,
+                    "language": language,
                 }
             )
-            logger.info(f"CALLER: {frame.text.strip()}")
+            self._emit_turn(text, language)
+            logger.info(f"CALLER: {text}")
 
         # Always forward the frame, whether or not we were interested in it.
         await self.push_frame(frame, direction)

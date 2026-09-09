@@ -18,7 +18,7 @@ from pathlib import Path
 
 from core.config import AppConfig, ConfigError, PoolPersona, config_for_persona
 from core.engine import Engine
-from core.records import CallStore, NullCallStore
+from core.records import CallStore, NullCallStore, RecordWriter
 from core.transport import BaseTransport
 
 
@@ -49,7 +49,7 @@ def create_transport(config: AppConfig) -> BaseTransport:
     )
 
 
-def create_engine(config: AppConfig) -> Engine:
+def create_engine(config: AppConfig, records: RecordWriter | None = None) -> Engine:
     """Build the conversation engine named by engine.provider.
 
     Called once PER CALL: an engine holds that call's conversation state, so
@@ -60,7 +60,11 @@ def create_engine(config: AppConfig) -> Engine:
     if provider == "pipecat":
         from engine.pipecat_engine import PipecatEngine
 
-        return PipecatEngine(config.engine, tenant_id=config.service.tenant_id)
+        return PipecatEngine(
+            config.engine,
+            tenant_id=config.service.tenant_id,
+            records=records,
+        )
 
     raise ConfigError(
         f"engine.provider: '{provider}' is not implemented. "
@@ -95,7 +99,9 @@ def create_call_store(config: AppConfig) -> CallStore:
     )
 
 
-def create_engine_for_persona(config: AppConfig, persona: PoolPersona) -> Engine:
+def create_engine_for_persona(
+    config: AppConfig, persona: PoolPersona, records: RecordWriter | None = None
+) -> Engine:
     """Build a fresh engine wearing one persona's name, voice and prompt.
 
     Deliberately a thin wrapper over create_engine rather than a second way to
@@ -107,4 +113,4 @@ def create_engine_for_persona(config: AppConfig, persona: PoolPersona) -> Engine
     concurrent calls -- even two calls on the SAME persona, if the pool ever
     allowed it -- cannot hear or remember each other.
     """
-    return create_engine(config_for_persona(config, persona))
+    return create_engine(config_for_persona(config, persona), records=records)

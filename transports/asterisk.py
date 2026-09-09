@@ -235,6 +235,16 @@ class AsteriskCallSession(CallSession):
             "bridge_id": self._ari_call.bridge_id,
         }
 
+    def io_counters(self) -> dict[str, int]:
+        """The same numbers `stats()` renders for the log, as data for a row."""
+        return {
+            "frames_in": self._io.frames_in,
+            "frames_out": self._io.frames_out,
+            "frames_out_real": self._io.frames_out_real,
+            "frames_dropped": self._io.frames_dropped,
+            "pacer_slips": self._io.pacer_slips,
+        }
+
     @property
     def can_transfer(self) -> bool:
         return self._controller is not None and self._ari_call is not None

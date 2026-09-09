@@ -68,9 +68,14 @@ so they come *before* concluding a node "only" handles N.
       self-describing header, transcript writes moved **off the event loop**,
       `frames_dropped` and the new `pacer_slips` surfaced, `tenant_id` threaded
       through. [[decisions]] 037.
-- [ ] **C — Persist.** PostgreSQL `calls` + `turns`. Writes via a queue and a
-      writer task, never on the loop. A DB outage degrades to log-and-continue,
-      never drops a call.
+- [x] **C — Persist.** `calls` + `turns`, written through a bounded queue and a
+      single writer task, never on the loop. A store outage drops rows with a
+      warning and the call carries on. **SQLite, not Postgres** — there was no
+      instance to verify against, and unverifiable persistence in a live service
+      is what [[decisions]] 025 exists to prevent; the store is behind an
+      interface so Postgres is a sibling file, not a rewrite ([[decisions]] 039,
+      040). `Engine.run()` now returns an `EngineResult` so `run_call` can write
+      the row with the three facts only the engine sees. Not live-verified.
 - [ ] **D — Control plane.** `aiohttp` (already a dependency): `/health`,
       `/metrics`, `/calls`, `/pool`, `WS /live`. `PoolStats` already exists and
       is currently only ever stringified into a log line.

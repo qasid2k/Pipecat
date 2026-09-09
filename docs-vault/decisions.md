@@ -1035,3 +1035,47 @@ install, so the better long-term arrangement is to point Asterisk's CDR at the
 same database once Stage F introduces Postgres — then `JOIN calls USING
 (uniqueid)` is native and the duplicated columns can be reconsidered on evidence
 rather than argument. Not worth doing while CDR is CSV and our store is SQLite.
+
+---
+
+## 042 — `Engine.run()` returns a result instead of writing the record itself
+*Date: 2026-09-09*
+
+**Decision.** `Engine.run(session)` now returns an `EngineResult` (or None):
+`cause`, `transferred_to`, the two transcript paths, and a turn count.
+`run_call` builds and submits the `CallRecord`.
+
+**Why the row is assembled outside the engine.** Three parties know different
+parts of a call, and only one of them owns its lifecycle:
+
+* the **transport** knows the identifiers and the frame counters,
+* the **pool** knows which agent took it,
+* the **engine** knows why it ended in conversational terms, whether the model
+  chose to hand the caller over, and where the files went.
+
+`run_call` already owns the `finally` where the call is definitively over, so it
+is the only place that can write a row carrying *final* counters and an end
+reason rather than a snapshot from halfway through. Letting the engine write the
+record would also mean every future engine needs to know about stores, writers
+and record shapes — precisely the coupling the `Engine` seam exists to prevent.
+
+**Why a return value rather than a mutable out-parameter.** Passing an object
+for the engine to fill would be invisible coupling, and would leave no way to
+tell "the engine did not set this" from "the engine set it to nothing". A return
+value makes the contract explicit and keeps `EngineResult` frozen. `None` is
+allowed so an engine with nothing to report is still a valid engine.
+
+**Why `transferred_to` is captured in the tool and not inferred.** The tool
+handler is the only place that knows the model *chose* a department. From
+outside, a transfer to billing and one to support are indistinguishable here —
+three departments dial the same endpoint. It is set when the handover is
+initiated, before the three-second announcement sleep, so a process torn down
+during those seconds still records what the caller was told was happening.
+
+**Consequences.** `EngineResult` uses no Pipecat vocabulary, so the contract
+stays engine-neutral; `tests/test_layering.py` still passes. A crashed engine
+returns None and the row is written anyway with
+`cause = "engine failed before it could report"` — a call that failed deserves a
+record more than one that went fine, not less. `CallSession` gained
+`io_counters()` alongside `vendor_ids`, both defaulting to empty so an adapter
+that tracks nothing still works.

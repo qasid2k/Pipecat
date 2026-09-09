@@ -35,11 +35,13 @@ import time
 from dotenv import load_dotenv
 from loguru import logger
 
-from core.config import AppConfig, ConfigError, load_config
+from core.config import AppConfig, ConfigError, PoolPersona, load_config
+from core.engine import EngineResult
 from core.logging import configure_logging
 from core.pool import AgentPool
+from core.records import CallRecord, RecordWriter, utcnow
 from core.transport import BaseTransport, CallSession
-from factories import create_engine_for_persona, create_transport
+from factories import create_call_store, create_engine_for_persona, create_transport
 
 load_dotenv()
 
@@ -48,8 +50,51 @@ load_dotenv()
 _active_calls: set[asyncio.Task] = set()
 
 
+def _call_record(
+    config: AppConfig,
+    session: CallSession,
+    persona: PoolPersona,
+    result: EngineResult | None,
+    started_at,
+    ended_at,
+) -> CallRecord:
+    """Assemble one call's row from the three places that know about it.
+
+    Nothing here computes or guesses: the transport supplies the identifiers and
+    the frame counters, the pool supplies who took the call, and the engine
+    supplies what only it saw. `result` is None when the engine crashed before
+    returning — the row is still written, because a call that failed is a call
+    worth having a record of, arguably more than one that went fine.
+    """
+    io_stats = session.io_counters()
+    vendor = session.vendor_ids
+    return CallRecord(
+        call_id=str(session.call_id),
+        tenant_id=config.service.tenant_id,
+        started_at=started_at,
+        ended_at=ended_at,
+        duration_s=round((ended_at - started_at).total_seconds(), 3),
+        caller_id=session.caller_id,
+        uniqueid=vendor.get("uniqueid", ""),
+        linkedid=vendor.get("linkedid", ""),
+        persona=persona.name,
+        voice=persona.voice,
+        llm_model=config.engine.llm.model,
+        end_reason=session.end_reason,
+        cause=result.cause if result else "engine failed before it could report",
+        transferred_to=result.transferred_to if result else None,
+        transcript_path=result.transcript_path if result else "",
+        conversation_path=result.conversation_path if result else "",
+        **io_stats,
+    )
+
+
 async def run_call(
-    config: AppConfig, pool: AgentPool, transport: BaseTransport, session: CallSession
+    config: AppConfig,
+    pool: AgentPool,
+    transport: BaseTransport,
+    session: CallSession,
+    records: RecordWriter | None = None,
 ):
     """One call, start to finish. The ONLY path a call can take.
 
@@ -88,11 +133,15 @@ async def run_call(
     # calls. The AudioSocket I/O threads are the one exception: threads do not
     # inherit the context, so they bind explicitly (see core/logging.py).
     with logger.contextualize(call_id=session.call_id, caller_id=session.caller_id):
-        await _serve(config, pool, transport, session)
+        await _serve(config, pool, transport, session, records)
 
 
 async def _serve(
-    config: AppConfig, pool: AgentPool, transport: BaseTransport, session: CallSession
+    config: AppConfig,
+    pool: AgentPool,
+    transport: BaseTransport,
+    session: CallSession,
+    records: RecordWriter | None = None,
 ):
     persona = await pool.acquire()
 
@@ -114,9 +163,11 @@ async def _serve(
         f"assigned '{persona.name}' ({persona.voice}) to {session.caller_id} "
         f"| {pool.stats()}"
     )
+    started_at = utcnow()
+    result: EngineResult | None = None
     try:
-        engine = create_engine_for_persona(config, persona)
-        await engine.run(session)
+        engine = create_engine_for_persona(config, persona, records=records)
+        result = await engine.run(session)
     except Exception as e:
         logger.exception(f"engine failed ('{persona.name}'): {e}")
     finally:
@@ -138,6 +189,16 @@ async def _serve(
         # disconnect() hangs up the caller too, and knows to skip that when they
         # already left or were transferred to a human.
         await session.disconnect()
+        # Written LAST, once the call is genuinely over, so the row carries the
+        # final frame counters and end reason rather than a snapshot from
+        # halfway through. submit() never blocks and never raises, so this
+        # cannot delay the next caller or mask an error on the way out.
+        if records is not None:
+            records.submit(
+                _call_record(
+                    config, session, persona, result, started_at, utcnow()
+                )
+            )
 
 
 def _install_signal_handlers(stop: asyncio.Event, force: asyncio.Event) -> None:
@@ -249,6 +310,16 @@ async def main(config: AppConfig):
     create_engine_for_persona(config, config.pool.personas[0])
     logger.info(f"Engine ready ({time.monotonic() - warm_start:.1f}s warm-up)")
 
+    # Records: one writer for the whole service, draining to one store. Started
+    # BEFORE the transport so no call can be answered before there is somewhere
+    # to record it. A store that cannot even open is a startup failure, not a
+    # surprise on the first call.
+    store = create_call_store(config)
+    records = RecordWriter(store)
+    records.set_logger(logger)
+    await records.start()
+    logger.info(f"Records: {store.describe}")
+
     transport = create_transport(config)
     await transport.start()
 
@@ -274,7 +345,9 @@ async def main(config: AppConfig):
             # INSIDE the task for the same reason -- rejecting a call can mean
             # talking to the vendor, and doing that here would stall the next
             # caller behind it.
-            task = asyncio.create_task(run_call(config, pool, transport, session))
+            task = asyncio.create_task(
+                run_call(config, pool, transport, session, records)
+            )
             _active_calls.add(task)
             task.add_done_callback(_active_calls.discard)
 
@@ -297,6 +370,12 @@ async def main(config: AppConfig):
         logger.info("shutting down: no new calls will be accepted")
         await _drain(config.service.drain_timeout_s, force)
         accepting.cancel()
+        # After the drain, because the calls that just ended submit their rows
+        # on the way out and those are exactly the ones worth keeping. close()
+        # waits for the queue, time-boxed so a hung store cannot hold up a
+        # shutdown.
+        await records.close()
+        logger.info(f"Records: {records.stats}")
         await transport.stop()
         logger.info(f"stopped cleanly | {pool.stats()}")
 

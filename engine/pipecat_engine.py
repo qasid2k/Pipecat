@@ -53,7 +53,8 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from core.config import ConfigError, EngineConfig
-from core.engine import Engine
+from core.engine import Engine, EngineResult
+from core.records import RecordWriter
 from core.transport import CallSession
 from engine.session_transport import CallSessionTransport
 from engine.transcripts import TranscriptRecorder, save_conversation
@@ -91,6 +92,12 @@ class CallResources:
     # though it worked. It is engine-side, not transport-side, because it is
     # about the spoken announcement rather than the transfer mechanism.
     announce_secs: float = 3.0
+    # Set by the transfer tool when a handover is actually initiated, and read
+    # by run() at the end to fill in the call record. Written here rather than
+    # inferred later because this is the only place that knows the LLM *chose*
+    # a department -- from the outside, a transfer to billing and one to support
+    # can be indistinguishable when both dial the same endpoint.
+    transferred_to: str | None = None
 
 
 async def transfer_to_department(params: FunctionCallParams):
@@ -119,6 +126,12 @@ async def transfer_to_department(params: FunctionCallParams):
             await session.transfer(department)
 
         asyncio.create_task(do_transfer())
+        # Recorded now, not after the sleep. The tool has committed to the
+        # handover and told the caller so; if the process is torn down during
+        # those three seconds, the record should still say a transfer to billing
+        # was what happened, because from the caller's side it was.
+        if res is not None:
+            res.transferred_to = department
         await params.result_callback({"result": f"Connecting the caller to {department} now."})
     else:
         await params.result_callback(
@@ -164,9 +177,14 @@ class PipecatEngine(Engine):
         config: EngineConfig,
         recordings_dir: Path = RECORDINGS_DIR,
         tenant_id: str = "default",
+        records: RecordWriter | None = None,
     ):
         self._config = config
         self._recordings_dir = recordings_dir
+        # Where per-utterance rows go, if anywhere. Optional: an engine with no
+        # writer still runs a call and still writes its transcript files, it
+        # just contributes no database rows.
+        self._records = records
         # Stamped onto every record this call writes. One value today; the point
         # is that records written now are still attributable if a second tenant
         # ever exists, instead of needing a migration to say who they belonged to.
@@ -257,7 +275,7 @@ class PipecatEngine(Engine):
         )
         return pipeline, context
 
-    async def run(self, session: CallSession) -> None:
+    async def run(self, session: CallSession) -> EngineResult:
         """Talk to this caller until the call ends.
 
         Note what is NOT here: no hangup. The caller of run() owns the session's
@@ -291,19 +309,29 @@ class PipecatEngine(Engine):
         }
 
         self._recordings_dir.mkdir(parents=True, exist_ok=True)
+        transcript_path = self._recordings_dir / f"{stamp}-transcript.jsonl"
+        conversation_path = self._recordings_dir / f"{stamp}-conversation.json"
         recorder = TranscriptRecorder(
-            self._recordings_dir / f"{stamp}-transcript.jsonl", call=call_meta
+            transcript_path,
+            call=call_meta,
+            # submit() is non-blocking and never raises, so an utterance costs
+            # the pipeline nothing even if the store is down.
+            on_turn=(lambda t: self._records.submit([t])) if self._records else None,
         )
 
         transport = CallSessionTransport(session)
         pipeline, context = self._build_pipeline(transport, recorder)
+        # Held in a variable rather than constructed inline: the transfer tool
+        # writes the chosen department onto it, and the `finally` below reads it
+        # back to fill in the call record.
+        resources = CallResources(
+            session=session,
+            announce_secs=self._config.transfer_announce_s,
+        )
         task = PipelineWorker(
             pipeline,
             idle_timeout_secs=self._config.idle_timeout_s,
-            app_resources=CallResources(
-                session=session,
-                announce_secs=self._config.transfer_announce_s,
-            ),
+            app_resources=resources,
         )
         runner = WorkerRunner(handle_sigint=False)
 
@@ -329,7 +357,7 @@ class PipecatEngine(Engine):
             watcher.cancel()
             save_conversation(
                 context,
-                self._recordings_dir / f"{stamp}-conversation.json",
+                conversation_path,
                 started,
                 call={**call_meta, "end_reason": session.end_reason,
                       "cause": cause["reason"]},
@@ -345,3 +373,14 @@ class PipecatEngine(Engine):
                 f"--- Call ended after {duration:.1f}s; {stats} ---\n"
                 f"    CAUSE: {cause['reason']}"
             )
+
+        # Returned, not stored: run_call owns the call record, and these are the
+        # three things only the engine can know -- why it ended in our terms,
+        # whether the model handed the caller over, and where the files went.
+        return EngineResult(
+            cause=cause["reason"],
+            transferred_to=resources.transferred_to,
+            transcript_path=str(transcript_path),
+            conversation_path=str(conversation_path),
+            turns=recorder.turns,
+        )
