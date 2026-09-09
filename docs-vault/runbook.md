@@ -510,6 +510,20 @@ appearing there is worth chasing and is what should stop a load test.
 drifted apart — the dialplan should have caught that caller first and played the
 busy message. Check `Pool: capacity N` at startup against the dialplan's cap.
 
+### Checking the record store (no phone needed)
+
+The store is not wired into the call path yet, so **no phone call exercises it**.
+This does, using the real config, factory, writer and store:
+
+```bash
+python tools/check_store.py
+```
+
+It writes one call plus two turns the way `run_call` will, reads them back with a
+plain query, runs the three analytics queries the table exists for, and deletes
+its own rows. Re-run it after any backend change — the point of the `CallStore`
+interface is that this script should not have to change.
+
 ### Automated tests (no phone needed)
 
 ```bash
