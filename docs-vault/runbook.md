@@ -611,29 +611,35 @@ rules. The two worth alerting on:
 AudioSocket connection, announces a UUID, then sends a frame every 20 ms and
 drains what comes back. The bot cannot tell the difference.
 
-**Set up a load config** (`config.local.yaml` is git-ignored):
+**Generate a load config** (`config.local.yaml` is git-ignored; it will not
+overwrite an existing file):
 
 ```bash
-cp config.yaml config.local.yaml
+python tools/loadtest.py --write-config config.local.yaml --personas 60
 ```
 
-Then edit three things:
-1. `engine.provider: silent` — answers and says nothing, opening **no Deepgram
-   or Gemini streams**. Without this, every virtual caller costs real money.
-2. `pool.personas` — add enough entries that the pool is never the limit. With
-   the silent engine the prompts and voices are never used, so copies are fine.
-   **If the roster is smaller than the test level, you measure the pool, not the
-   machine** — the tool says so when that happens.
-3. `service.records.path` / `service.log.file` — point somewhere disposable so a
-   load run does not pollute real call records.
+That derives it from `config.yaml` with four changes, each easy to forget by
+hand and expensive to forget in a different way:
 
-**Run it:**
+| Change | Why |
+|---|---|
+| `engine.provider: silent` | opens **no Deepgram or Gemini streams** — without it every virtual caller costs real money |
+| a roster of 60 personas | **if the roster is smaller than the test level you measure the pool, not the machine** (the tool says so when that happens) |
+| records and logs to `*loadtest*` | so a run does not bury real call records under synthetic ones |
+| ARI commented out | a load test drives AudioSocket directly and needs no call control |
+
+**Run it** — two terminals:
 
 ```bash
-python bot.py config.local.yaml          # one terminal
-python tools/loadtest.py --ramp 40 --step 8 --every 3 --duration 10   # another
+python bot.py config.local.yaml
+```
+```bash
+python tools/loadtest.py --ramp 40 --step 8 --every 3 --duration 10
 python tools/loadtest.py --spike 30 --duration 15
 ```
+
+If the bot is not up, the harness says so and exits rather than reporting a
+ceiling of zero as though it had measured one.
 
 Ramp finds the *sustained* ceiling; spike finds the *burst* ceiling. Both are
 needed — this service's known weak point is burst arrival.

@@ -56,13 +56,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import statistics
 import sys
 import time
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 FRAME_BYTES = 320
 FRAME_SECS = 0.020
@@ -251,14 +251,107 @@ async def level(host, port, api, n, duration, label) -> bool:
     return summarise(label, Report(list(results)), before, after)
 
 
+def write_config(path: str, personas: int) -> int:
+    """Derive a load-test config from the real one.
+
+    Four changes, each of which is easy to forget by hand and expensive to
+    forget in a different way:
+
+      * `engine.provider: silent` -- otherwise every virtual caller opens real
+        Deepgram and Gemini streams and the run costs money.
+      * a roster of `personas` -- if the pool is smaller than the test level you
+        measure the pool, not the machine.
+      * records and logs to separate files -- so a load run does not bury real
+        call records under thousands of synthetic ones.
+      * ARI commented out -- a load test drives AudioSocket directly and does
+        not need call control, so this also runs on a machine without it.
+    """
+    import re
+
+    source = Path(__file__).resolve().parent.parent / "config.yaml"
+    text = source.read_text(encoding="utf-8")
+
+    text = text.replace("provider: pipecat", "provider: silent")
+    text = re.sub(r"^(\s*)ari_pass_env:", r"\1# ari_pass_env:", text, flags=re.M)
+    text = text.replace("path: records/calls.db", "path: records/loadtest.db")
+    text = text.replace("file: logs/agent.jsonl", "file: logs/loadtest.jsonl")
+
+    # The silent engine never reads a prompt or speaks a voice, so identical
+    # copies are fine -- these exist only to make the pool big enough.
+    roster = "\n".join(
+        f"    - name: Load{i:02d}\n"
+        f"      voice: aura-2-helena-en\n"
+        f"      system_prompt_file: prompts/alex.txt"
+        for i in range(personas)
+    )
+    text, count = re.subn(
+        r"(pool:\n  personas:\n).*?(\n\n  # Each persona)",
+        lambda m: m.group(1) + roster + m.group(2),
+        text,
+        flags=re.S,
+    )
+    if not count:
+        print("Could not find the pool.personas block in config.yaml -- has its")
+        print("shape changed? Edit the generated file by hand.")
+        return 1
+
+    out = Path(path)
+    if out.exists():
+        print(f"{out} already exists; not overwriting.")
+        return 1
+    out.write_text(text, encoding="utf-8")
+
+    print(f"Wrote {out}:")
+    print(f"  engine.provider  silent   (no Deepgram, no Gemini, no cost)")
+    print(f"  pool.personas    {personas}        (so the pool is not the limit)")
+    print(f"  records / logs   *loadtest*  (kept apart from real calls)")
+    print(f"  ARI              disabled")
+    print(f"\nIt is git-ignored. Now:")
+    print(f"    python bot.py {out}")
+    return 0
+
+
+async def reachable(host: str, port: int) -> str:
+    """Is anything listening? One connection, opened and closed."""
+    try:
+        reader, writer = await asyncio.open_connection(host, port)
+    except OSError as e:
+        return str(e)
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except (ConnectionError, OSError):
+        pass
+    return ""
+
+
 async def main(args) -> int:
+    if args.write_config:
+        return write_config(args.write_config, args.personas)
+
     api = f"http://{args.api_host}:{args.api_port}"
     print(f"target      {args.host}:{args.port}   (metrics: {api})")
+
+    # Pre-flight. Running the whole ramp against a closed port and then printing
+    # "LAST CLEAN LEVEL: 0" would be reporting a measurement that never happened
+    # -- worse than failing, because it looks like an answer.
+    problem = await reachable(args.host, args.port)
+    if problem:
+        print(f"\nNothing is listening on {args.host}:{args.port} -- {problem}\n")
+        print("The bot is not running. Start it first, in another terminal:")
+        print("    python bot.py config.local.yaml")
+        print("")
+        print("No load config yet? Generate one:")
+        print(f"    python {sys.argv[0]} --write-config config.local.yaml")
+        return 1
+
     probe = metrics(api)
     if "error" in probe:
         print(f"WARNING: cannot read {api}/metrics -- {probe['error']}")
-        print("         Falling back to harness-side numbers only, which cannot")
-        print("         see dropped frames or pacer slips. Start the bot first.")
+        print("         AudioSocket is up but the control plane is not, so this")
+        print("         run cannot see dropped frames or pacer slips -- the only")
+        print("         reliable overload signals. Results will be weak evidence.")
+        print(f"         Check service.api in the config, or pass --api-port.")
     else:
         print(f"pool busy   {probe.get('pool_busy', 0):.0f} before we start")
 
@@ -318,4 +411,12 @@ if __name__ == "__main__":
     p.add_argument("--every", type=float, default=3, help="seconds between levels")
     p.add_argument("--spike", type=int, help="instead: N callers all at once")
     p.add_argument("--duration", type=float, default=15, help="seconds per call")
+    p.add_argument(
+        "--write-config", metavar="PATH",
+        help="generate a load-test config from config.yaml and exit",
+    )
+    p.add_argument(
+        "--personas", type=int, default=60,
+        help="roster size for --write-config (must exceed the test level)",
+    )
     sys.exit(asyncio.run(main(p.parse_args())))
