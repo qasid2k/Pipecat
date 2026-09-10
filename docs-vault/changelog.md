@@ -6,6 +6,32 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-10 — Stage D: a control plane and a live dashboard
+`/health`, `/pool`, `/calls`, `/metrics`, `WS /live`, and a supervisor page at
+`/` — in-process, read-only, loopback.
+
+* **In-process, so a slow handler is a dropped call.** Every handler reads memory
+  and returns: no database queries, no file I/O, access log off. Historical
+  questions stay a query against `records/calls.db` ([[decisions]] 043).
+* **Loopback by default, and that is a security decision.** `/calls` returns
+  caller phone numbers and there is no authentication. Binding wider is allowed
+  but warns. `/metrics` carries numbers only, with a test asserting a caller
+  number cannot appear in it.
+* **`/health` is 200 with `at_capacity` when full** — a busy node is doing its
+  job and must not be pulled out of a load balancer for it.
+* **Live state is separate from the pool** ([[decisions]] 044). `PoolStats` knows
+  Sarah is busy but not who she is talking to, and adding that would put display
+  concerns inside the class where a mistake double-books a caller. The database
+  cannot answer it either: a row is written in the `finally`.
+* **The socket pushes only on change** ([[decisions]] 045), with durations
+  derived in the browser — so an idle service sends nothing at all rather than a
+  message a second forever. The dashboard is one self-contained HTML file: no
+  build step, no CDN, on a VM that may have no outbound internet.
+
+114 tests (up from 94). Not live-verified.
+
+---
+
 ## 2026-09-09 — Stage C: every call leaves a queryable row
 Logs answer "what happened on this call". Records answer "how many calls did
 Daniel take, how often did we transfer to billing, what is the average handle

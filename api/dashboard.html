@@ -1,0 +1,238 @@
+<!doctype html>
+<!--
+  The supervisor dashboard.
+
+  One self-contained file: no build step, no CDN, no framework. That is
+  deliberate. It is served from memory by api/server.py on a VM that may have no
+  outbound internet, and a dashboard that needs npm to change is a dashboard
+  nobody changes. Everything here is plain HTML, CSS and about a hundred lines of
+  JavaScript.
+
+  It renders whatever /live pushes. Durations tick on the BROWSER's clock,
+  derived from each call's started_at, so the server sends nothing at all while
+  the service is idle -- see ApiServer._signature.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice agents</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262a33;
+    --text: #e6e8ec; --dim: #8b93a2;
+    --ok: #4ade80; --busy: #fbbf24; --bad: #f87171; --accent: #60a5fa;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7f9; --panel: #fff; --line: #e3e6ea;
+      --text: #14171c; --dim: #626b7a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .tenant { color: var(--dim); font-size: 13px; }
+  #conn {
+    margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  #conn.up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+  #conn.down { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .panel h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--dim); margin: 0 0 12px; font-weight: 600;
+  }
+  .big { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .big small { font-size: 14px; color: var(--dim); font-weight: 400; }
+
+  .agents { display: flex; flex-wrap: wrap; gap: 6px; }
+  .agent {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--line);
+  }
+  .agent.free { color: var(--ok); }
+  .agent.busy { color: var(--busy); border-color: color-mix(in srgb, var(--busy) 40%, transparent); }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  th {
+    text-align: left; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--dim); font-weight: 600;
+    padding: 0 12px 8px 0; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+  .dur { font-variant-numeric: tabular-nums; }
+  .empty { color: var(--dim); padding: 24px 0; text-align: center; }
+  .stats { display: flex; flex-wrap: wrap; gap: 20px; }
+  .stat small { display: block; color: var(--dim); font-size: 11px; }
+  .stat b { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.warn b { color: var(--bad); }
+  footer { margin-top: 20px; color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Voice agents</h1>
+  <span class="tenant" id="tenant"></span>
+  <span id="conn">connecting…</span>
+</header>
+
+<div class="grid" style="margin-bottom:16px">
+  <div class="panel">
+    <h2>Capacity</h2>
+    <div class="big"><span id="busy">–</span><small> / <span id="capacity">–</span> in use</small></div>
+  </div>
+  <div class="panel">
+    <h2>Agents</h2>
+    <div class="agents" id="agents"></div>
+  </div>
+  <div class="panel">
+    <h2>Since start</h2>
+    <div class="stats">
+      <div class="stat"><small>answered</small><b id="calls_total">–</b></div>
+      <div class="stat"><small>transferred</small><b id="transfers_total">–</b></div>
+      <div class="stat" id="rej"><small>turned away</small><b id="calls_rejected_total">–</b></div>
+      <div class="stat" id="fail"><small>failed</small><b id="calls_failed_total">–</b></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Audio health</h2>
+    <div class="stats">
+      <div class="stat" id="drop"><small>frames dropped</small><b id="frames_dropped_total">–</b></div>
+      <div class="stat" id="slip"><small>pacer slips</small><b id="pacer_slips_total">–</b></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Calls in progress</h2>
+  <table>
+    <thead>
+      <tr><th>Duration</th><th>Agent</th><th>Caller</th><th>Call id</th></tr>
+    </thead>
+    <tbody id="calls"></tbody>
+  </table>
+  <div class="empty" id="nocalls">No calls in progress</div>
+</div>
+
+<footer id="uptime"></footer>
+
+<script>
+"use strict";
+
+// Latest state from the server. The server pushes only when something actually
+// changes; everything time-based below is derived locally from it.
+let state = null;
+
+const $ = (id) => document.getElementById(id);
+
+function connect() {
+  const ws = new WebSocket(
+    (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/live"
+  );
+
+  ws.onopen = () => { $("conn").textContent = "live"; $("conn").className = "up"; };
+
+  ws.onmessage = (event) => {
+    state = JSON.parse(event.data);
+    render();
+  };
+
+  ws.onclose = () => {
+    $("conn").textContent = "disconnected";
+    $("conn").className = "down";
+    // Reconnect rather than leaving a dead page on screen. A dashboard that
+    // silently stopped updating is worse than one that says it is offline,
+    // because it looks like a service with no calls.
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+function hhmmss(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(s / 60);
+  return m >= 60
+    ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
+    : `${m}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function render() {
+  if (!state) return;
+
+  $("tenant").textContent = state.tenant || "";
+  $("busy").textContent = state.pool.busy;
+  $("capacity").textContent = state.pool.capacity;
+
+  const agents = $("agents");
+  agents.innerHTML = "";
+  for (const name of state.pool.busy_agents) {
+    agents.insertAdjacentHTML("beforeend",
+      `<span class="agent busy">${esc(name)}</span>`);
+  }
+  for (const name of state.pool.free_agents) {
+    agents.insertAdjacentHTML("beforeend",
+      `<span class="agent free">${esc(name)}</span>`);
+  }
+
+  for (const key of ["calls_total", "transfers_total", "calls_rejected_total",
+                     "calls_failed_total", "frames_dropped_total",
+                     "pacer_slips_total"]) {
+    $(key).textContent = state.counters[key];
+  }
+  // Anything non-zero in these four is worth a supervisor's attention.
+  $("rej").classList.toggle("warn", state.counters.calls_rejected_total > 0);
+  $("fail").classList.toggle("warn", state.counters.calls_failed_total > 0);
+  $("drop").classList.toggle("warn", state.counters.frames_dropped_total > 0);
+  $("slip").classList.toggle("warn", state.counters.pacer_slips_total > 0);
+
+  renderCalls();
+}
+
+function renderCalls() {
+  if (!state) return;
+  const body = $("calls");
+  const calls = state.calls || [];
+  $("nocalls").style.display = calls.length ? "none" : "block";
+
+  body.innerHTML = calls.map((c) => {
+    // Duration from the browser's clock, so it ticks smoothly between pushes.
+    const secs = (Date.now() - new Date(c.started_at).getTime()) / 1000;
+    return `<tr>
+      <td class="dur">${hhmmss(secs)}</td>
+      <td>${esc(c.persona)}</td>
+      <td class="mono">${esc(c.caller_id)}</td>
+      <td class="mono">${esc(String(c.call_id).slice(0, 8))}</td>
+    </tr>`;
+  }).join("");
+
+  if (state.counters) {
+    $("uptime").textContent = "up " + hhmmss(state.counters.uptime_s);
+  }
+}
+
+// Caller ids and agent names come from the phone network and from config. They
+// should never contain markup, but a dashboard is not the place to find out.
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch]));
+}
+
+// Redraw once a second so durations advance without the server sending anything.
+setInterval(renderCalls, 1000);
+connect();
+</script>
+</body>
+</html>

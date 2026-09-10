@@ -541,6 +541,24 @@ than one that went fine, not less.
 **A caller rejected at capacity gets no row**, because they were never served.
 Counting turned-away callers is a CDR question ([[decisions]] 041).
 
+### The supervisor dashboard
+
+Open **http://localhost:8091/** in a browser. It shows capacity, which agents are
+free or busy by name, the calls in progress with durations ticking, and the
+totals since start — updating live.
+
+From your laptop, tunnel it (it is loopback-only for good reason, below):
+
+```bash
+ssh -L 8091:localhost:8091 root@<vm>
+# then open http://localhost:8091/ locally
+```
+
+The page is one self-contained HTML file with no build step and no CDN, served
+from memory. Durations are counted by the browser, so **the server sends nothing
+at all while the service is idle** ([[decisions]] 045). "disconnected" in the
+corner means the socket dropped; it reconnects on its own.
+
 ### The control plane
 
 A read-only HTTP surface on `127.0.0.1:8091` (`service.api`). Everything it
@@ -551,6 +569,8 @@ curl -s localhost:8091/health   # liveness + capacity
 curl -s localhost:8091/pool     # who is free, who is busy, by name
 curl -s localhost:8091/calls    # calls in progress RIGHT NOW
 curl -s localhost:8091/metrics  # Prometheus counters
+curl -s localhost:8091/api      # what endpoints exist
+#      ws://localhost:8091/live   the dashboard's push channel
 ```
 
 `/health` returns **200 with `status: at_capacity`** when all agents are busy.

@@ -172,6 +172,118 @@ class LiveCallsTest(unittest.TestCase):
         self.assertIn("calls_rejected_total", c.as_dict())
 
 
+class LiveSocketTest(unittest.IsolatedAsyncioTestCase):
+    """The push channel. Its job is to be quiet when nothing is happening."""
+
+    async def asyncSetUp(self):
+        self.pool = AgentPool(roster(2))
+        self.live = LiveCalls()
+        self.counters = Counters()
+        self.server = ApiServer(
+            pool=self.pool, live=self.live, counters=self.counters, port=18096
+        )
+        await self.server.start()
+
+    async def asyncTearDown(self):
+        await self.server.stop()
+
+    async def test_a_new_connection_gets_the_state_immediately(self):
+        """Without this a dashboard shows nothing until something changes,
+        which on a quiet service could be a very long time."""
+        import aiohttp
+
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect("http://127.0.0.1:18096/live") as ws:
+                state = json.loads((await ws.receive(timeout=5)).data)
+
+        self.assertEqual(state["pool"]["capacity"], 2)
+        self.assertEqual(state["calls"], [])
+        self.assertIn("calls_total", state["counters"])
+
+    async def test_a_change_is_pushed(self):
+        import aiohttp
+
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect("http://127.0.0.1:18096/live") as ws:
+                await ws.receive(timeout=5)  # the initial state
+                self.live.started(
+                    LiveCall("c1", "101", "Sarah", "voice-1", _utcnow())
+                )
+                state = json.loads((await ws.receive(timeout=5)).data)
+
+        self.assertEqual(len(state["calls"]), 1)
+        self.assertEqual(state["calls"][0]["persona"], "Sarah")
+
+    async def test_an_idle_service_pushes_nothing(self):
+        """The reason durations and uptime are excluded from the change
+        signature. Including them would push a full update every second
+        forever, on a service doing nothing at all."""
+        import aiohttp
+
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect("http://127.0.0.1:18096/live") as ws:
+                await ws.receive(timeout=5)  # the initial state
+                with self.assertRaises(asyncio.TimeoutError):
+                    await ws.receive(timeout=3)
+
+    async def test_stopping_closes_watching_dashboards(self):
+        """A dashboard should be told the service went away, not left to time
+        out and keep showing stale numbers as if they were live."""
+        import aiohttp
+
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect("http://127.0.0.1:18096/live") as ws:
+                await ws.receive(timeout=5)
+                await self.server.stop()
+                message = await ws.receive(timeout=5)
+                self.assertIn(
+                    message.type,
+                    (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED,
+                     aiohttp.WSMsgType.CLOSING),
+                )
+
+    async def test_the_dashboard_page_is_served(self):
+        import aiohttp
+
+        async with aiohttp.ClientSession() as s:
+            async with s.get("http://127.0.0.1:18096/") as r:
+                self.assertEqual(r.status, 200)
+                self.assertEqual(r.content_type, "text/html")
+                body = await r.text()
+
+        self.assertIn("<title>Voice agents</title>", body)
+        # It must be self-contained: no CDN, no build step. The VM may have no
+        # outbound internet, and a dashboard needing npm is one nobody changes.
+        self.assertNotIn("http://cdn", body)
+        self.assertNotIn("https://cdn", body)
+        self.assertNotIn("<script src=", body)
+
+
+class SignatureTest(unittest.TestCase):
+    def test_ticking_values_do_not_count_as_a_change(self):
+        base = {
+            "pool": {"free": 1, "busy": 0},
+            "calls": [{"call_id": "c1", "persona": "A", "started_at": "T",
+                       "duration_s": 3}],
+            "counters": {"calls_total": 1, "uptime_s": 10.0},
+        }
+        later = json.loads(json.dumps(base))
+        later["calls"][0]["duration_s"] = 99      # the call is still going
+        later["counters"]["uptime_s"] = 999.0     # time passed
+
+        self.assertEqual(ApiServer._signature(base), ApiServer._signature(later))
+
+    def test_a_real_change_does_count(self):
+        base = {
+            "pool": {"free": 1, "busy": 0}, "calls": [],
+            "counters": {"calls_total": 1, "uptime_s": 10.0},
+        }
+        changed = json.loads(json.dumps(base))
+        changed["pool"]["busy"] = 1
+
+        self.assertNotEqual(ApiServer._signature(base), ApiServer._signature(changed))
+
+
 class ApiBindingTest(unittest.IsolatedAsyncioTestCase):
     async def test_it_really_serves_over_tcp_on_loopback(self):
         """The handlers are tested above; this proves start()/stop() work and

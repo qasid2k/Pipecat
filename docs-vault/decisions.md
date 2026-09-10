@@ -1155,3 +1155,43 @@ the rest of the teardown succeeding. Counters are monotonic only; anything
 current (free agents, calls in flight) is read live at scrape time, because a
 counter can be scraped at any interval and still give a correct rate while a
 sampled gauge can miss a spike entirely.
+
+---
+
+## 045 — The dashboard is pushed only when something changes
+*Date: 2026-09-10*
+
+**Decision.** `WS /live` sends the full state on connect, then again only when a
+**change signature** differs — and that signature deliberately excludes every
+value that ticks on its own: uptime, and each call's duration. The browser
+derives durations locally from `started_at`.
+
+**Why.** The obvious implementation pushes a snapshot every second. On a service
+with no calls that is a message a second, forever, per watcher — pure event-loop
+work in the same process that answers phone calls, to tell a dashboard that
+nothing happened. Excluding the ticking values means **an idle service sends
+nothing at all**, and a dashboard left open overnight costs one string comparison
+a second.
+
+It also renders better: a duration counted by the browser advances smoothly,
+where one refreshed by a server push jumps whenever the network hiccups.
+
+**Consequences.** The change signature is now something that has to be kept
+honest — add a field that ticks and the socket goes back to chattering. Two tests
+pin it: one asserting a changed duration and uptime do *not* count as a change,
+one asserting an idle service pushes nothing for three seconds.
+
+One shared broadcast task serves every connected socket, so the snapshot is
+computed once per tick regardless of how many people are watching. The signature
+is shared rather than per-socket, which is why a new connection sets it after its
+initial send — without that, the first tick after connecting resent the identical
+state, which is exactly what the idle test caught.
+
+The socket is **output only**: incoming frames are drained so aiohttp can process
+pings and closes, and discarded. Accepting commands would make it a control
+channel, and there is no authentication ([[decisions]] 043).
+
+**The page itself** is one self-contained HTML file with no build step, no
+framework and no CDN. It is served from memory by the API, on a VM that may have
+no outbound internet — and a dashboard that needs `npm` to change is a dashboard
+nobody changes. A test asserts it contains no external `<script src=>`.

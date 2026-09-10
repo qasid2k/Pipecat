@@ -37,10 +37,12 @@ port. See [[decisions]] 043.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
-from aiohttp import web
+from aiohttp import WSCloseCode, web
 from loguru import logger
 
 from core.live import Counters, LiveCalls
@@ -78,23 +80,46 @@ class ApiServer:
         self._port = port
         self._tenant_id = tenant_id
         self._runner: web.AppRunner | None = None
+        self._dashboard: str | None = None
+        # Connected dashboards. One shared broadcast task serves all of them, so
+        # the cost of watching does not scale with the number of watchers.
+        self._sockets: set[web.WebSocketResponse] = set()
+        self._broadcast: asyncio.Task | None = None
+        # Signature of the state every connected dashboard has already been
+        # sent. Shared, not per-socket: a new connection is given the current
+        # state directly, so after that everyone is at the same point.
+        self._last_sig: str | None = None
 
     # -- lifecycle ---------------------------------------------------------
     async def start(self) -> None:
+        # Read the dashboard once, into memory. Serving it from disk on every
+        # request would be file I/O on the call loop, for a file that never
+        # changes while the process is running.
+        try:
+            self._dashboard = (Path(__file__).parent / "dashboard.html").read_text(
+                encoding="utf-8"
+            )
+        except OSError as e:
+            self._dashboard = None
+            logger.warning(f"dashboard page unavailable: {e}")
+
         app = web.Application()
         app.add_routes(
             [
-                web.get("/", self._index),
+                web.get("/", self._dashboard_page),
+                web.get("/api", self._index),
                 web.get("/health", self._health),
                 web.get("/pool", self._pool_state),
                 web.get("/calls", self._calls),
                 web.get("/metrics", self._metrics),
+                web.get("/live", self._live_socket),
             ]
         )
         self._runner = web.AppRunner(app, access_log=None)  # access log = loop work
         await self._runner.setup()
         site = web.TCPSite(self._runner, self._host, self._port)
         await site.start()
+        self._broadcast = asyncio.create_task(self._broadcast_loop())
         logger.info(f"API on http://{self._host}:{self._port} (read-only)")
         if self._host not in ("127.0.0.1", "localhost", "::1"):
             # Not refused, because there are legitimate reasons to bind wider --
@@ -105,9 +130,118 @@ class ApiServer:
             )
 
     async def stop(self) -> None:
+        if self._broadcast is not None:
+            self._broadcast.cancel()
+            self._broadcast = None
+        for ws in list(self._sockets):
+            # Close them explicitly so a watching dashboard is told the service
+            # is going away, rather than being left to time out.
+            await ws.close(code=WSCloseCode.GOING_AWAY, message=b"shutting down")
+        self._sockets.clear()
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
+
+    # -- live push ---------------------------------------------------------
+    def _state(self) -> dict:
+        stats = self._pool.stats()
+        return {
+            "tenant": self._tenant_id,
+            "pool": {
+                "capacity": stats.capacity,
+                "free": stats.free,
+                "busy": stats.busy,
+                "free_agents": list(stats.free_names),
+                "busy_agents": list(stats.busy_names),
+            },
+            "calls": self._live.snapshot(),
+            "counters": self._counters.as_dict(),
+        }
+
+    @staticmethod
+    def _signature(state: dict) -> str:
+        """What counts as a CHANGE worth sending.
+
+        Deliberately excludes everything that ticks on its own -- uptime, and
+        each call's duration. Including them would make every state differ from
+        the last, so the socket would push a full update every second forever
+        even with nothing happening. The browser derives durations from
+        `started_at` on its own clock, which is both cheaper and smoother.
+        """
+        return json.dumps(
+            {
+                "pool": state["pool"],
+                "calls": [
+                    (c["call_id"], c["persona"], c["started_at"])
+                    for c in state["calls"]
+                ],
+                "counters": {
+                    k: v for k, v in state["counters"].items() if k != "uptime_s"
+                },
+            },
+            sort_keys=True,
+        )
+
+    async def _broadcast_loop(self, tick: float = 1.0) -> None:
+        """Push state to every connected dashboard, but only when it changed.
+
+        One task for all clients: the snapshot is computed once per tick no
+        matter how many people are watching. An idle service sends nothing at
+        all, so a dashboard left open overnight costs one comparison a second.
+        """
+        while True:
+            try:
+                await asyncio.sleep(tick)
+                if not self._sockets:
+                    continue
+                state = self._state()
+                signature = self._signature(state)
+                # `_last_sig` is also set when a socket connects and is handed
+                # the state directly. Without that, a fresh connection would be
+                # sent the very same state again on the next tick.
+                if signature == self._last_sig:
+                    continue
+                self._last_sig = signature
+                await self._push(state)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                # A broadcast failure must never take down the process, and must
+                # not stop later broadcasts either.
+                logger.warning(f"dashboard broadcast failed: {e}")
+
+    async def _push(self, state: dict) -> None:
+        text = json.dumps(state, default=str)
+        for ws in list(self._sockets):
+            try:
+                await ws.send_str(text)
+            except Exception:  # noqa: BLE001
+                self._sockets.discard(ws)
+
+    async def _live_socket(self, request: web.Request) -> web.WebSocketResponse:
+        """Push updates to a dashboard. Read-only: anything sent is ignored."""
+        ws = web.WebSocketResponse(heartbeat=30)
+        await ws.prepare(request)
+        self._sockets.add(ws)
+        try:
+            state = self._state()
+            await ws.send_str(json.dumps(state, default=str))
+            # This client is now up to date, so the broadcast loop must not
+            # immediately resend the same thing on its next tick.
+            self._last_sig = self._signature(state)
+            # Drain incoming frames so aiohttp can process pings and closes. The
+            # payloads are discarded: this socket is an output, and accepting
+            # commands would make it a control channel that has no auth.
+            async for _ in ws:
+                pass
+        finally:
+            self._sockets.discard(ws)
+        return ws
+
+    async def _dashboard_page(self, _request: web.Request) -> web.Response:
+        if self._dashboard is None:
+            return _json({"error": "dashboard page not available"}, status=404)
+        return web.Response(text=self._dashboard, content_type="text/html")
 
     # -- handlers. Each one reads memory and returns. -----------------------
     async def _index(self, _request: web.Request) -> web.Response:
@@ -115,7 +249,9 @@ class ApiServer:
             {
                 "service": "voice-agent",
                 "tenant": self._tenant_id,
-                "endpoints": ["/health", "/pool", "/calls", "/metrics"],
+                "endpoints": [
+                    "/", "/health", "/pool", "/calls", "/metrics", "/live (ws)"
+                ],
             }
         )
 
