@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import statistics
 import sys
 import time
@@ -170,6 +171,14 @@ async def one_caller(host: str, port: int, duration: float) -> CallerResult:
     return result
 
 
+def health(api: str) -> dict:
+    try:
+        with urllib.request.urlopen(f"{api}/health", timeout=2) as r:
+            return json.loads(r.read().decode())
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+
+
 def metrics(api: str) -> dict:
     """Pull the bot's own counters. These are the authoritative numbers."""
     wanted = (
@@ -251,7 +260,7 @@ async def level(host, port, api, n, duration, label) -> bool:
     return summarise(label, Report(list(results)), before, after)
 
 
-def write_config(path: str, personas: int) -> int:
+def write_config(path: str, personas: int, force: bool = False) -> int:
     """Derive a load-test config from the real one.
 
     Four changes, each of which is easy to forget by hand and expensive to
@@ -296,8 +305,20 @@ def write_config(path: str, personas: int) -> int:
         return 1
 
     out = Path(path)
-    if out.exists():
-        print(f"{out} already exists; not overwriting.")
+    if out.exists() and not force:
+        # Loud, because carrying on with a STALE config.local.yaml is the
+        # expensive mistake: it may still say `pipecat`, in which case the load
+        # run opens real provider streams and bills for them.
+        print(f"!! {out} ALREADY EXISTS and was NOT changed.")
+        print("")
+        print("   If it is an old copy it probably still says engine.provider:")
+        print("   pipecat -- running a load test against that opens a REAL")
+        print("   Deepgram and Gemini stream per virtual caller, and costs money.")
+        print("")
+        print("   Overwrite it:")
+        print(f"       python {sys.argv[0]} --write-config {out} --force")
+        print("   Or keep it and write elsewhere:")
+        print(f"       python {sys.argv[0]} --write-config config.loadtest.yaml")
         return 1
     out.write_text(text, encoding="utf-8")
 
@@ -327,7 +348,7 @@ async def reachable(host: str, port: int) -> str:
 
 async def main(args) -> int:
     if args.write_config:
-        return write_config(args.write_config, args.personas)
+        return write_config(args.write_config, args.personas, args.force)
 
     api = f"http://{args.api_host}:{args.api_port}"
     print(f"target      {args.host}:{args.port}   (metrics: {api})")
@@ -344,6 +365,30 @@ async def main(args) -> int:
         print("No load config yet? Generate one:")
         print(f"    python {sys.argv[0]} --write-config config.local.yaml")
         return 1
+
+    # Which engine is actually answering? A stale config.local.yaml that still
+    # says `pipecat` looks identical from here until the bill arrives: every
+    # virtual caller would open a real Deepgram and Gemini stream. Refusing by
+    # default costs a re-run; not refusing costs money.
+    state = health(api)
+    engine = state.get("engine", "unknown")
+    if "error" not in state and engine != "silent":
+        print(f"\nThe bot is running engine.provider = '{engine}', not 'silent'.")
+        print("")
+        print("Every virtual caller would open a REAL provider stream -- Deepgram")
+        print("and Gemini -- and this run would cost money. It would also measure")
+        print(f"the pool ({state.get('capacity', '?')} agents), not the machine.")
+        print("")
+        print("Most likely a stale config.local.yaml. Regenerate it:")
+        print("    mv config.local.yaml config.local.yaml.bak")
+        print(f"    python {sys.argv[0]} --write-config config.local.yaml")
+        print("    python bot.py config.local.yaml")
+        print("")
+        print("To measure the REAL engine on purpose (it will cost money), pass")
+        print("    --allow-real-engine")
+        if not args.allow_real_engine:
+            return 1
+        print("\n--allow-real-engine given; continuing against a real engine.\n")
 
     probe = metrics(api)
     if "error" in probe:
@@ -418,5 +463,14 @@ if __name__ == "__main__":
     p.add_argument(
         "--personas", type=int, default=60,
         help="roster size for --write-config (must exceed the test level)",
+    )
+    p.add_argument(
+        "--allow-real-engine", action="store_true",
+        help="run against a non-silent engine. THIS COSTS MONEY: every virtual "
+             "caller opens a real Deepgram and Gemini stream.",
+    )
+    p.add_argument(
+        "--force", action="store_true",
+        help="with --write-config, overwrite an existing file",
     )
     sys.exit(asyncio.run(main(p.parse_args())))

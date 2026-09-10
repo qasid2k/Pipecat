@@ -38,6 +38,7 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
         server = ApiServer(
             pool=self.pool, live=self.live, counters=self.counters,
             records=self.records, tenant_id="techbridge",
+            engine_provider="silent",
         )
         # Drive the same handlers through aiohttp's test client rather than
         # binding a real port: the routes are what is under test, not TCP.
@@ -62,6 +63,12 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
         return json.loads(await resp.text())
 
     # -- health ------------------------------------------------------------
+    async def test_health_names_the_engine(self):
+        """The load harness reads this to refuse running against the REAL engine
+        by accident -- which would open a provider stream per virtual caller and
+        bill for every one of them."""
+        self.assertEqual((await self.get_json("/health"))["engine"], "silent")
+
     async def test_health_reports_capacity(self):
         body = await self.get_json("/health")
         self.assertEqual(body["status"], "ok")

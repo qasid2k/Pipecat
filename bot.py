@@ -368,6 +368,7 @@ async def main(config: AppConfig):
             pool=pool, live=live, counters=counters, records=records,
             host=config.service.api.host, port=config.service.api.port,
             tenant_id=config.service.tenant_id,
+            engine_provider=config.engine.provider,
         )
         try:
             await api.start()

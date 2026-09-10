@@ -71,7 +71,9 @@ class ApiServer:
         host: str = "127.0.0.1",
         port: int = 8091,
         tenant_id: str = "default",
+        engine_provider: str = "unknown",
     ):
+        self._engine_provider = engine_provider
         self._pool = pool
         self._live = live
         self._counters = counters
@@ -268,6 +270,12 @@ class ApiServer:
             {
                 "status": "ok" if stats.free else "at_capacity",
                 "tenant": self._tenant_id,
+                # Which engine is answering. Exposed so a load test can refuse to
+                # run against the REAL one by accident -- that would open a
+                # provider stream per virtual caller and cost money. Also the
+                # fastest way to catch a service left in silent mode, where every
+                # caller hears nothing.
+                "engine": self._engine_provider,
                 "uptime_s": self._counters.uptime_s,
                 "capacity": stats.capacity,
                 "free": stats.free,
