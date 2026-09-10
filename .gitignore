@@ -1,35 +1,88 @@
-# Secrets -- never commit real API keys
+# =============================================================================
+#  What must never be committed.
+#
+#  Two categories, and the first one is the one that matters:
+#    1. SECRETS and PERSONAL DATA -- API keys, caller numbers, transcripts,
+#       call audio. A mistake here is not tidiness, it is a disclosure.
+#    2. Generated or machine-specific files -- rebuildable, or true only on one
+#       person's machine.
+# =============================================================================
+
+# --- Secrets -----------------------------------------------------------------
+# `.env` holds the four real API keys. The glob matters as much as the name:
+# .env.local, .env.bak and .env.production all hold the same secrets and would
+# otherwise be committed. `.env.example` is the one deliberate exception -- it
+# has variable NAMES and no values.
 .env
+.env.*
+!.env.example
 
-# Machine-specific config overrides. config.yaml IS committed (it holds no
-# secrets); use this name, or $VOICEAGENT_CONFIG, for local experiments you
-# don't want to push -- e.g. running without ARI on a dev laptop.
+# --- Machine-specific config -------------------------------------------------
+# config.yaml IS committed: it holds no secrets, only the names of environment
+# variables. These are local variants -- running without ARI on a laptop, the
+# generated load-test config (tools/loadtest.py --write-config), and the backups
+# people make before editing.
 config.local.yaml
+config.loadtest.yaml
+config.*.local.yaml
+*.yaml.bak
+*.yml.bak
 
-# Virtual environment (rebuildable from requirements)
-.venv/
-
-# Python bytecode / caches
-__pycache__/
-*.pyc
-
-# Call transcripts / recordings -- real conversation data, not source code
+# --- Call data: the most sensitive thing this service produces ---------------
+# Transcripts, conversations, caller numbers, call metadata, and (from Stage G)
+# call audio. All of it is personal data about real callers.
 recordings/
-
-# Test run logs
-*.log
-# Structured logs. These hold caller numbers and transcribed speech -- the same
-# personal data as recordings/, so they are just as much not source code.
+records/
 logs/
 *.jsonl
-# Call records. Caller numbers, transcripts, and every call's metadata -- the
-# most sensitive artifact this service produces. (-wal/-shm are SQLite's.)
-records/
 *.db
 *.db-wal
 *.db-shm
+# Audio in any form, wherever it lands. Listed explicitly because a stray dump
+# outside recordings/ is exactly as sensitive as one inside it.
+*.wav
+*.raw
+*.pcm
+*.sln
+*.ulaw
 
-# Obsidian per-machine UI state (which panes are open, window geometry).
-# The rest of .obsidian/ IS committed, so vault settings are shared.
+# --- Logs --------------------------------------------------------------------
+*.log
+nohup.out
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+# Virtual environments, under any of the usual names.
+.venv/
+venv/
+env/
+ENV/
+# Build and test artefacts
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# --- Editors and operating systems -------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Obsidian ----------------------------------------------------------------
+# Per-machine UI state (which panes are open, window geometry). The rest of
+# .obsidian/ IS committed, so vault settings stay shared.
 docs-vault/.obsidian/workspace.json
 docs-vault/.obsidian/workspace-mobile.json
