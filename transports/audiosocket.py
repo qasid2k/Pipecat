@@ -176,6 +176,10 @@ class AudioSocketConnection:
             self._sock.close()
         except OSError:
             pass
+        # The write thread is on its way out, so nothing will drain the outgoing
+        # queue again. Release any waiter so it can see `_running` is False and
+        # give up, rather than waiting for room that will never appear.
+        self._signal_space()
 
     def _signal_space(self):
         """Tell the asyncio side there is room on the outgoing queue.
@@ -192,11 +196,21 @@ class AudioSocketConnection:
             pass
 
     def _signal_end(self, reason: str):
-        """Called from a thread; wakes the asyncio side."""
+        """Called from a thread; wakes the asyncio side.
+
+        Wakes BOTH directions. The inbound sentinel alone is not enough: a call
+        can be blocked on the OUTBOUND queue at the moment the socket dies, and
+        the write thread that would normally free it has just stopped. Leaving
+        that waiter asleep strands the call and leaks its persona ([[bugs]]
+        B-014).
+        """
         if not self.hangup_event.is_set():
             self.end_reason = reason
             self._loop.call_soon_threadsafe(self.hangup_event.set)
             self._loop.call_soon_threadsafe(self.incoming.put_nowait, None)
+            # Wake anyone waiting for room; `queue_output` re-checks
+            # hangup_event first thing and gives up.
+            self._signal_space()
 
     # -- READ thread (blocking recv, never starved by the event loop) ------
     def _read_loop(self):
@@ -340,6 +354,21 @@ class AudioSocketConnection:
         ceiling that arrives at 32.
         """
         while True:
+            # THE CALL IS OVER CHECK, FIRST AND EVERY TIME ROUND.
+            #
+            # Only the write thread makes room, so once it has stopped -- the
+            # caller hung up, the socket died -- nothing will ever drain this
+            # queue again. Without this check a writer that arrives while the
+            # queue is full waits on `_space` forever, `engine.run()` never
+            # returns, and that call's PERSONA IS NEVER RELEASED. Capacity then
+            # drops by one, silently and permanently.
+            #
+            # Found by the load harness: 60 agents held with no calls in
+            # progress ([[bugs]] B-014). Dropping the frame is right -- the call
+            # is over and this audio has nowhere to go.
+            if not self._running or self.hangup_event.is_set():
+                return
+
             # Cleared BEFORE the attempt, not after a failure. If the write
             # thread consumes between a failed put and the wait, the set() would
             # land on an event we then cleared, and this frame would sit here

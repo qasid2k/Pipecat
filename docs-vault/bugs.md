@@ -415,3 +415,63 @@ POSIX one via a patched `sys.platform`, since development is on Windows), that a
 second bind still fails, that the error explains both causes, and that
 `SO_RCVBUF` is still set before bind — B-001's fix living in the same function
 and equally easy to break by tidying.
+
+---
+
+## B-014 — A call blocked on outbound audio at hangup leaked its persona ✅ FIXED
+**Found 2026-09-10 by `tools/loadtest.py` on the VM, fixed and verified the same
+day.** The first bug in this project found by load rather than by a person
+dialling in — and it could not have been found any other way.
+
+**Symptom.** After a ramp of virtual callers, the second run began:
+
+```
+pool busy   60 before we start
+
+=== SPIKE 30 callers at once ===
+  bot: calls           +0
+  bot: REJECTED        +30  <-- POOL FULL
+```
+
+**Sixty agents held with no calls in progress.** Every subsequent caller was
+refused. The service had, in effect, capacity zero, and nothing in the logs said
+why: no errors, no exceptions, just calls that never ended.
+
+**Root cause.** Only the write thread takes frames off the outgoing queue. When
+that thread stops — the caller hung up, the socket died — nothing will ever drain
+it again.
+
+A call whose engine was blocked in `queue_output` at that moment waited on
+`_space` **forever**. Nothing set it: `_signal_end` woke the inbound side (a
+`None` sentinel on `incoming`) but never the outbound side, and `stop()` did not
+either. So `engine.run()` never returned, `run_call`'s `finally` never ran, and
+that call's persona was never released.
+
+It needs a **full outgoing queue at the exact instant of hangup**, which needs
+concurrency — which is why manual dialling never showed it and why it leaked
+progressively worse as the ramp climbed.
+
+**A note on the age of this.** The pre-Stage-E code had the same hole in a worse
+form: `run_in_executor(None, queue.put)` blocked a shared thread-pool worker
+forever instead of a coroutine, leaking a pool thread as well as a persona
+([[decisions]] 046). Moving the wait onto the event loop did not cause the leak;
+it just made it cheap enough to survive long enough to be caught.
+
+**Fix.** Two halves, and both are needed:
+
+1. `queue_output` checks `_running` / `hangup_event` **first and on every loop**,
+   and returns if the call is over. Dropping the frame is correct — the call has
+   ended and the audio has nowhere to go.
+2. `_signal_end` and `stop` now call `_signal_space()`, so a writer already
+   waiting wakes up and re-checks rather than sleeping through the hangup.
+
+Either alone is insufficient: without (1) a woken writer loops back and waits
+again; without (2) nothing ever wakes it.
+
+**Verified.** 4 tests in `tests/test_backpressure.py`, including one that drives
+an engine-shaped loop through a hangup while blocked. Then end to end: a ramp to
+24 concurrent callers on a 40-persona pool, after which `/pool` reported
+`free: 40, busy: 0`.
+
+**Check for it:** after any load run, `curl -s localhost:8091/pool`. `busy` must
+return to 0. A `busy` that never falls is this bug or its next relative.

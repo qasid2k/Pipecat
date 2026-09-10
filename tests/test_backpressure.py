@@ -149,5 +149,78 @@ class BackPressureTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(asyncio.gather(*waiters), timeout=5)
 
 
+class EndOfCallReleasesWaitersTest(unittest.IsolatedAsyncioTestCase):
+    """B-014: a writer blocked on a full queue when the call ends.
+
+    Only the write thread makes room. Once it stops -- caller hung up, socket
+    died -- nothing will ever drain the queue again, so a writer waiting there
+    waits forever, `engine.run()` never returns, and that call's PERSONA IS
+    NEVER RELEASED. Capacity drops by one, silently and permanently.
+
+    Found by `tools/loadtest.py`: 60 agents held with no calls in progress. No
+    amount of manual dialling would have shown it -- it needs a full outgoing
+    queue at the exact moment of hangup, which happens under concurrency.
+    """
+
+    async def full_connection(self) -> AudioSocketConnection:
+        io = connection()
+        for _ in range(MAX_OUT_FRAMES):
+            await io.queue_output(FRAME)
+        return io
+
+    async def test_hangup_releases_a_blocked_writer(self):
+        io = await self.full_connection()
+        waiting = asyncio.create_task(io.queue_output(FRAME))
+        await asyncio.sleep(0.05)
+        self.assertFalse(waiting.done(), "precondition: should be blocked")
+
+        # What the read thread does when Asterisk sends HANGUP.
+        io._signal_end("caller hung up")
+
+        await asyncio.wait_for(waiting, timeout=1)
+
+    async def test_stop_releases_a_blocked_writer(self):
+        """The shutdown-drain path: session.hangup() calls io.stop()."""
+        io = await self.full_connection()
+        waiting = asyncio.create_task(io.queue_output(FRAME))
+        await asyncio.sleep(0.05)
+        self.assertFalse(waiting.done())
+
+        io.stop()
+
+        await asyncio.wait_for(waiting, timeout=1)
+
+    async def test_writing_after_the_call_ended_returns_at_once(self):
+        """Not just the already-waiting writer: anything arriving afterwards
+        must give up too, or the next frame strands the call instead."""
+        io = await self.full_connection()
+        io._signal_end("caller hung up")
+
+        await asyncio.wait_for(io.queue_output(FRAME), timeout=1)
+        await asyncio.wait_for(io.queue_output(FRAME), timeout=1)
+
+    async def test_the_engine_loop_can_finish_after_a_hangup(self):
+        """The property that actually matters, at the level it bit us: an engine
+        writing every frame it reads must return when the call ends, so
+        `run_call`'s finally can release the persona."""
+        io = await self.full_connection()
+
+        done = False
+
+        async def engine_like():
+            nonlocal done
+            # Blocked here, exactly like SilentEngine and the real pipeline.
+            await io.queue_output(FRAME)
+            done = True
+
+        task = asyncio.create_task(engine_like())
+        await asyncio.sleep(0.05)
+        self.assertFalse(done)
+
+        io._signal_end("Asterisk sent HANGUP (caller hung up)")
+        await asyncio.wait_for(task, timeout=1)
+        self.assertTrue(done, "the call would have hung and leaked its persona")
+
+
 if __name__ == "__main__":
     unittest.main()
