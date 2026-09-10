@@ -75,14 +75,21 @@ so they come *before* concluding a node "only" handles N.
       is what [[decisions]] 025 exists to prevent; the store is behind an
       interface so Postgres is a sibling file, not a rewrite ([[decisions]] 039,
       040). `Engine.run()` now returns an `EngineResult` so `run_call` can write
-      the row with the three facts only the engine sees. Not live-verified.
+      the row with the three facts only the engine sees. **Live-verified
+      2026-09-10.**
 - [x] **D — Control plane + dashboard.** `/health`, `/pool`, `/calls`,
       `/metrics`, `WS /live` and a supervisor page at `/`, over `aiohttp`,
       in-process and read-only, bound to loopback because `/calls` returns caller
       numbers and there is no auth ([[decisions]] 043). Live call state lives in
       `core/live.py`, deliberately separate from the pool ([[decisions]] 044).
       The socket pushes only on change, so an idle service sends nothing
-      ([[decisions]] 045). Not live-verified.
+      ([[decisions]] 045). **Live-verified 2026-09-10.**
+
+**Stages A–D are live on the VM as of 2026-09-10** — the service runs, answers,
+records, and reports. What that confirms is the *path*: calls are served, rows
+are written, the dashboard shows them. It does not by itself confirm the
+fine-grained items still listed in §4 below, which need looking at specifically
+rather than in passing.
 - [ ] **E — Measure the ceiling.** *Gates F.* Fix limits 1 and 3, build a load
       harness, ramp until `DROPPED`/`slips` appear. Record CPU and memory per
       call and N_max. Fill in the provider limits in [[runbook]] §4.
@@ -129,7 +136,8 @@ a caller.
 | # | Question | Why it matters |
 |---|---|---|
 | 1 | **Provider concurrency limits are unknown.** The table in [[runbook]] §4 is deliberately blank rather than guessed. All personas share one Deepgram key and one Gemini key, so N calls = N concurrent streams on each. | Exceeding them looks exactly like a code bug: some calls answer, others die on connect, and nothing in this repo is at fault. Academic at N=3; real in the tens. |
-| 2 | **Are `aura-2-thalia-en` and `aura-2-orion-en` real Deepgram voices?** Never verified against the account. | A typo surfaces as a TTS failure on that persona's first call, not at startup ([[personas]]). |
+| ~~2~~ | ~~Are `aura-2-thalia-en` and `aura-2-orion-en` real Deepgram voices?~~ **Closed 2026-09-10** — the roster has been rotating through all three on live calls, so all three voices resolve. | — |
+| 2b | **Is `linkedid` actually populated in the records?** The ARI variable fetch works, but nobody has read the column. | Empty `linkedid` means transferred calls cannot be stitched back together in the CDR — recoverable only while the channel exists. |
 | 3 | **Phase 4 dialplan — partly confirmed.** The `GROUP` gate is live and working: a call in progress was observed holding `agents`, and the group cleared afterwards. **Still unconfirmed: the spoken busy message, and the transferred and caller-dropped exit paths.** | A slot that is not freed reduces capacity permanently and silently. |
 | 4 | **The `released 'Daniel'` line was never confirmed** in the log where his call was torn down while the pipeline was still cancelling. Probably fine; unproven. | If it is not there, an agent leaked. |
 | 5 | **No tested ceiling for N**, and no CPU/memory figures per call. | Raising N is currently a guess. Phase 5 item. |
