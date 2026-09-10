@@ -86,8 +86,13 @@ class ListenSocketTest(unittest.TestCase):
             with self.assertRaises(OSError) as caught:
                 transport(PORT + 5)._make_listen_socket()
             message = str(caught.exception)
-            self.assertIn("already running", message)
-            self.assertIn("TIME_WAIT", message)
+            # The drain is listed FIRST because it is the cause we created
+            # ourselves and the one that catches people out: restarting within
+            # drain_timeout_s of Ctrl+C lands here while the old run is still
+            # letting its calls finish.
+            self.assertIn("SHUTTING DOWN", message)
+            self.assertIn("drain", message)
+            self.assertIn("pgrep -af bot.py", message)
             self.assertIn(str(PORT + 5), message)
         finally:
             first.close()

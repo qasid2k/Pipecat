@@ -423,15 +423,26 @@ class AsteriskTransport(BaseTransport):
             sock.bind((self._host, self._port))
         except OSError as e:
             sock.close()
-            # The raw errno tells you nothing about which of the two causes it is,
-            # and they need opposite responses.
+            # The raw errno says only "in use". The causes need different
+            # responses -- wait, or go and kill something -- so name them.
+            #
+            # The first is the one that catches people out, and it is our own
+            # doing: the graceful drain (bot.py) keeps this socket bound while
+            # in-flight calls finish, so a restart within `drain_timeout_s` of
+            # Ctrl+C lands here. The previous run logs "stopped cleanly" when it
+            # has actually let go.
+            port = self._port
             raise OSError(
-                f"cannot bind {self._host}:{self._port} -- {e}\n"
-                "  Either another bot is already running (check: "
-                "ss -lptn 'sport = :{port}'  /  pgrep -af bot.py), in which case "
-                "stop it;\n"
-                "  or the previous run left sockets in TIME_WAIT, in which case "
-                "waiting ~60s clears it.".replace("{port}", str(self._port))
+                f"cannot bind {self._host}:{port} -- {e}\n"
+                f"  1. A previous run may still be SHUTTING DOWN: the drain holds "
+                f"this port until its calls finish (up to service.drain_timeout_s, "
+                f"default 30s). Wait for its 'stopped cleanly' line.\n"
+                f"  2. Another bot may be running:  ss -lptn 'sport = :{port}'  "
+                f"or  pgrep -af bot.py\n"
+                f"     Stop it with:  kill -TERM <pid>   (then wait, see 1)\n"
+                f"  3. On Windows only, sockets in TIME_WAIT can hold the port; "
+                f"waiting ~60s clears it. On Linux SO_REUSEADDR already covers "
+                f"this (see bugs.md B-013)."
             ) from e
         return sock
 

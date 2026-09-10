@@ -209,6 +209,13 @@ What it does, in this order:
 **Press Ctrl+C again to skip the wait.** One caller who never hangs up should
 not hold a deploy hostage for the full timeout.
 
+> ⚠️ **The drain holds port 8090 until it finishes.** Restarting within
+> `drain_timeout_s` of Ctrl+C fails with `Address already in use` — the old
+> process is still there, letting its calls end. **Wait for its
+> `stopped cleanly` line before starting the new one**, or press Ctrl+C a second
+> time to cut the drain short. This is the commonest cause of that error and it
+> is self-inflicted; see [[bugs]] B-013.
+
 **The line to check:** `stopped cleanly | N/N free`. Anything less than `N/N`
 means a persona did not come back — which, since the process is exiting, matters
 less for this run than as a signal that a release path is broken.
