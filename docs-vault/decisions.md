@@ -1079,3 +1079,79 @@ returns None and the row is written anyway with
 record more than one that went fine, not less. `CallSession` gained
 `io_counters()` alongside `vendor_ids`, both defaulting to empty so an adapter
 that tracks nothing still works.
+
+---
+
+## 043 — The control plane is read-only, in-process, and bound to loopback
+*Date: 2026-09-10*
+
+**Decision.** A small aiohttp server in the same process, on the same event
+loop, serving `/health`, `/pool`, `/calls` and `/metrics`. No endpoint changes
+anything. It binds `127.0.0.1` by default.
+
+**Why in-process.** The state worth exposing — who is free, who is on a call
+right now — lives in memory here and nowhere else. A separate service would need
+to be told about it, which means either shared storage (a new dependency, and a
+new thing that can be stale) or the call path doing extra work to publish it. A
+handler that reads a dictionary costs nothing. `aiohttp` is already a dependency,
+used as a client by ARI, so this adds nothing to install.
+
+**What sharing the loop costs, and the rule it forces.** A slow handler is a
+dropped call. This codebase has lost calls to event-loop stalls twice ([[bugs]]
+B-001, B-011), and a Prometheus scrape every fifteen seconds is a dependable way
+to find a third. So **every handler reads memory and returns**: no database
+queries, no file I/O, nothing awaited that can be slow. Historical questions are
+a query against `records/calls.db` run by whoever is asking. If a handler ever
+needs real work it moves off the loop or out of the process — it does not get
+"just this one await". aiohttp's access log is disabled for the same reason.
+
+**Why read-only.** There is no endpoint to hang up a call, reload config or take
+an agent out of the pool. A control plane that can *act* needs authentication,
+and this has none. Read-only keeps the blast radius of that decision to
+disclosure rather than disruption.
+
+**Why loopback, specifically.** `/calls` returns **caller phone numbers**.
+Binding `0.0.0.0` publishes personal data to anyone who can reach the port, with
+no credential required. Loopback plus an SSH tunnel or an authenticating proxy is
+the intended remote-access story. Binding wider is not refused — there are
+legitimate reasons — but it logs a warning, because the one thing that must not
+happen is it changing by accident and nobody noticing.
+
+**Consequences.** `/metrics` deliberately carries **numbers only**, no call ids,
+personas or caller numbers: a metrics endpoint is the one most likely to be
+scraped into a system with looser access rules than this one. `/health` returns
+**200 with `status: at_capacity`** when the pool is full — a busy node is doing
+its job, and a load balancer must not pull it out for that; it goes unhealthy
+only when something is actually wrong. The API starts *after* the transport and
+stops *before* the drain, so it can never report ready while nothing can answer,
+nor healthy while the service is on its way out.
+
+---
+
+## 044 — Live call state is separate from the pool
+*Date: 2026-09-10*
+
+**Decision.** `core/live.py` holds `LiveCalls` (who is on a call, with caller,
+agent and duration) and `Counters` (totals since boot). The pool is untouched.
+
+**Why not extend the pool.** `PoolStats` knows Sarah is busy; it does not know
+who she is talking to or for how long, and adding that would put display
+concerns inside the one class where a mistake double-books a caller.
+`core/pool.py` is small on purpose.
+
+**Why not read the database.** A call's row is written in the `finally`, so a
+call *in progress* does not appear in it at all. "Who is on a call right now" is
+a question only in-memory state can answer — and answering it from the database
+would mean a query on the event loop, which the previous decision forbids.
+
+**Consequences.** `LiveCalls` uses a plain `threading.Lock`, not an
+`asyncio.Lock`: the critical sections are three dictionary operations, so a
+blocking lock held for nanoseconds is safe on the loop, whereas an asyncio lock
+would make every read a coroutine and make it unusable from the I/O threads that
+already exist. `live.ended()` is called **first** in the call's `finally`, before
+anything that can fail — a call still showing as in progress after it ended is
+the one way this display can actively mislead, and removing it must not depend on
+the rest of the teardown succeeding. Counters are monotonic only; anything
+current (free agents, calls in flight) is read live at scrape time, because a
+counter can be scraped at any interval and still give a correct rate while a
+sampled gauge can miss a spike entirely.

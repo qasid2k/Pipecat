@@ -37,6 +37,7 @@ from loguru import logger
 
 from core.config import AppConfig, ConfigError, PoolPersona, load_config
 from core.engine import EngineResult
+from core.live import Counters, LiveCall, LiveCalls
 from core.logging import configure_logging
 from core.pool import AgentPool
 from core.records import CallRecord, RecordWriter, utcnow
@@ -95,6 +96,8 @@ async def run_call(
     transport: BaseTransport,
     session: CallSession,
     records: RecordWriter | None = None,
+    live: LiveCalls | None = None,
+    counters: Counters | None = None,
 ):
     """One call, start to finish. The ONLY path a call can take.
 
@@ -133,7 +136,7 @@ async def run_call(
     # calls. The AudioSocket I/O threads are the one exception: threads do not
     # inherit the context, so they bind explicitly (see core/logging.py).
     with logger.contextualize(call_id=session.call_id, caller_id=session.caller_id):
-        await _serve(config, pool, transport, session, records)
+        await _serve(config, pool, transport, session, records, live, counters)
 
 
 async def _serve(
@@ -142,6 +145,8 @@ async def _serve(
     transport: BaseTransport,
     session: CallSession,
     records: RecordWriter | None = None,
+    live: LiveCalls | None = None,
+    counters: Counters | None = None,
 ):
     persona = await pool.acquire()
 
@@ -156,6 +161,8 @@ async def _serve(
         logger.warning(
             f"POOL FULL -- rejecting call from {session.caller_id} | {pool.stats()}"
         )
+        if counters is not None:
+            counters.calls_rejected_total += 1
         await transport.reject(session)
         return
 
@@ -163,6 +170,18 @@ async def _serve(
         f"assigned '{persona.name}' ({persona.voice}) to {session.caller_id} "
         f"| {pool.stats()}"
     )
+    if counters is not None:
+        counters.calls_total += 1
+    if live is not None:
+        live.started(
+            LiveCall(
+                call_id=str(session.call_id),
+                caller_id=session.caller_id,
+                persona=persona.name,
+                voice=persona.voice,
+                started_at=utcnow(),
+            )
+        )
     started_at = utcnow()
     result: EngineResult | None = None
     try:
@@ -170,7 +189,15 @@ async def _serve(
         result = await engine.run(session)
     except Exception as e:
         logger.exception(f"engine failed ('{persona.name}'): {e}")
+        if counters is not None:
+            counters.calls_failed_total += 1
     finally:
+        # Off the live list FIRST, before anything that can be slow or fail.
+        # A call still showing as in-progress after it ended is the one way this
+        # display can actively mislead, and the fix must not depend on the rest
+        # of the teardown succeeding.
+        if live is not None:
+            live.ended(str(session.call_id))
         # Safe on a CANCELLED call (a dropped line, and in Phase 5 a shutdown
         # drain) only because `release` never yields: its lock is always
         # uncontended, since nothing awaits inside the critical section. If that
@@ -193,12 +220,15 @@ async def _serve(
         # final frame counters and end reason rather than a snapshot from
         # halfway through. submit() never blocks and never raises, so this
         # cannot delay the next caller or mask an error on the way out.
+        record = _call_record(config, session, persona, result, started_at, utcnow())
         if records is not None:
-            records.submit(
-                _call_record(
-                    config, session, persona, result, started_at, utcnow()
-                )
-            )
+            records.submit(record)
+        if counters is not None:
+            # Summed from the finished call, so the totals and the row agree.
+            counters.frames_dropped_total += record.frames_dropped
+            counters.pacer_slips_total += record.pacer_slips
+            if record.transferred_to:
+                counters.transfers_total += 1
 
 
 def _install_signal_handlers(stop: asyncio.Event, force: asyncio.Event) -> None:
@@ -320,8 +350,26 @@ async def main(config: AppConfig):
     await records.start()
     logger.info(f"Records: {store.describe}")
 
+    # Observation state. Separate from the pool on purpose: the pool decides who
+    # may answer, these only watch. See core/live.py.
+    live = LiveCalls()
+    counters = Counters()
+
     transport = create_transport(config)
     await transport.start()
+
+    # The API comes up AFTER the transport, so /health cannot report ready while
+    # the thing that answers calls is still binding its socket.
+    api = None
+    if config.service.api.enabled:
+        from api.server import ApiServer
+
+        api = ApiServer(
+            pool=pool, live=live, counters=counters, records=records,
+            host=config.service.api.host, port=config.service.api.port,
+            tenant_id=config.service.tenant_id,
+        )
+        await api.start()
 
     stop = asyncio.Event()
     force = asyncio.Event()
@@ -346,7 +394,9 @@ async def main(config: AppConfig):
             # talking to the vendor, and doing that here would stall the next
             # caller behind it.
             task = asyncio.create_task(
-                run_call(config, pool, transport, session, records)
+                run_call(
+                    config, pool, transport, session, records, live, counters
+                )
             )
             _active_calls.add(task)
             task.add_done_callback(_active_calls.discard)
@@ -368,6 +418,11 @@ async def main(config: AppConfig):
         # pull both out from under the very calls we are trying to end politely,
         # and leave orphaned channels on the Asterisk side.
         logger.info("shutting down: no new calls will be accepted")
+        # The API goes first: it only reports, and leaving it up during the
+        # drain would answer /health as healthy while the service is on its way
+        # out -- which is exactly when a load balancer must stop sending traffic.
+        if api is not None:
+            await api.stop()
         await _drain(config.service.drain_timeout_s, force)
         accepting.cancel()
         # After the drain, because the calls that just ended submit their rows

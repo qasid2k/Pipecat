@@ -541,6 +541,43 @@ than one that went fine, not less.
 **A caller rejected at capacity gets no row**, because they were never served.
 Counting turned-away callers is a CDR question ([[decisions]] 041).
 
+### The control plane
+
+A read-only HTTP surface on `127.0.0.1:8091` (`service.api`). Everything it
+reports comes from memory, so it is safe to poll.
+
+```bash
+curl -s localhost:8091/health   # liveness + capacity
+curl -s localhost:8091/pool     # who is free, who is busy, by name
+curl -s localhost:8091/calls    # calls in progress RIGHT NOW
+curl -s localhost:8091/metrics  # Prometheus counters
+```
+
+`/health` returns **200 with `status: at_capacity`** when all agents are busy.
+That is not a failure — a busy node is doing its job, and a load balancer must
+not pull it out for that.
+
+`/calls` shows only calls **in progress**; a finished call is a database row
+(§ above), not an API response. Longest-running first, because that is the call
+worth looking at.
+
+> ⚠️ **`/calls` returns caller phone numbers and there is no authentication.**
+> The loopback default is a security decision ([[decisions]] 043). For remote
+> access use an SSH tunnel — `ssh -L 8091:localhost:8091 root@vm` — or put an
+> authenticating proxy in front. Binding `0.0.0.0` publishes personal data to
+> anyone who can reach the port; it is allowed, but it logs a warning.
+
+`/metrics` carries numbers only — no call ids, personas or caller numbers —
+because it is the endpoint most likely to be scraped somewhere with looser access
+rules. The two worth alerting on:
+
+| Metric | Meaning |
+|---|---|
+| `voiceagent_frames_dropped_total` | inbound audio discarded — the pipeline fell behind a caller |
+| `voiceagent_pacer_slips_total` | outbound audio ran late — callers heard choppiness |
+| `voiceagent_records_dropped_total` | the analytics are quietly going incomplete |
+| `voiceagent_calls_rejected_total` | callers turned away at capacity |
+
 ### Checking the record store without a phone
 
 ```bash

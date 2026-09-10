@@ -76,9 +76,12 @@ so they come *before* concluding a node "only" handles N.
       interface so Postgres is a sibling file, not a rewrite ([[decisions]] 039,
       040). `Engine.run()` now returns an `EngineResult` so `run_call` can write
       the row with the three facts only the engine sees. Not live-verified.
-- [ ] **D — Control plane.** `aiohttp` (already a dependency): `/health`,
-      `/metrics`, `/calls`, `/pool`, `WS /live`. `PoolStats` already exists and
-      is currently only ever stringified into a log line.
+- [x] **D — Control plane (API).** `/health`, `/pool`, `/calls`, `/metrics` over
+      `aiohttp`, in-process and read-only, bound to loopback because `/calls`
+      returns caller numbers and there is no auth ([[decisions]] 043). Live call
+      state lives in `core/live.py`, deliberately separate from the pool
+      ([[decisions]] 044). **`WS /live` and the dashboard page are still to do**
+      — the API is the half everything else reads. Not live-verified.
 - [ ] **E — Measure the ceiling.** *Gates F.* Fix limits 1 and 3, build a load
       harness, ramp until `DROPPED`/`slips` appear. Record CPU and memory per
       call and N_max. Fill in the provider limits in [[runbook]] §4.

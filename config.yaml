@@ -202,3 +202,20 @@ service:
     # Relative to this file. Contains caller numbers and transcribed speech, so
     # it is git-ignored and needs the same retention policy as recordings/.
     path: records/calls.db
+
+  # A small READ-ONLY HTTP surface over the running service:
+  #   /health   liveness + capacity      /calls    calls in progress right now
+  #   /pool     who is free, who is busy /metrics  Prometheus counters
+  #
+  # It runs in this process, on the same event loop as the calls, so every
+  # handler only reads memory -- no database queries, no file I/O. A slow
+  # handler here would be a dropped call (see bugs.md B-001, B-011).
+  api:
+    enabled: true
+    # LOOPBACK BY DEFAULT, and that is a security decision, not laziness:
+    # /calls returns caller phone numbers and there is NO authentication.
+    # Binding to 0.0.0.0 publishes personal data to anyone who can reach the
+    # port. If you need remote access, put it behind an authenticating proxy
+    # or an SSH tunnel -- see decisions.md 043.
+    host: 127.0.0.1
+    port: 8091

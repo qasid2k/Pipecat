@@ -566,6 +566,34 @@ def _load_records(data) -> RecordsConfig:
 
 
 @dataclass(frozen=True)
+class ApiConfig:
+    """The read-only control plane.
+
+    `host` defaults to loopback ON PURPOSE: `/calls` returns caller phone
+    numbers and there is no authentication. Binding wider publishes personal
+    data to anyone who can reach the port.
+    """
+
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = 8091
+
+
+def _load_api(data) -> ApiConfig:
+    path = "service.api"
+    d = _section(data, path, allowed={"enabled", "host", "port"})
+    defaults = ApiConfig()
+    port = int(d.get("port", defaults.port))
+    if not 1 <= port <= 65535:
+        raise ConfigError(f"{path}.port: {port} is not a port number")
+    return ApiConfig(
+        enabled=bool(d.get("enabled", defaults.enabled)),
+        host=str(d.get("host", defaults.host)),
+        port=port,
+    )
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     """Operational settings: nothing here changes what a caller hears."""
 
@@ -583,6 +611,7 @@ class ServiceConfig:
 
     log: LogConfig = field(default_factory=LogConfig)
     records: RecordsConfig = field(default_factory=RecordsConfig)
+    api: ApiConfig = field(default_factory=ApiConfig)
 
 
 VALID_LOG_LEVELS = {"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"}
@@ -610,7 +639,8 @@ def _load_log(data) -> LogConfig:
 def _load_service(data) -> ServiceConfig:
     path = "service"
     d = _section(
-        data, path, allowed={"drain_timeout_s", "tenant_id", "log", "records"}
+        data, path,
+        allowed={"drain_timeout_s", "tenant_id", "log", "records", "api"},
     )
     defaults = ServiceConfig()
     timeout = _number(
@@ -629,6 +659,7 @@ def _load_service(data) -> ServiceConfig:
         tenant_id=tenant.strip(),
         log=_load_log(d.get("log", {})),
         records=_load_records(d.get("records", {})),
+        api=_load_api(d.get("api", {})),
     )
 
 
