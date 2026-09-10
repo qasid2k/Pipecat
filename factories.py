@@ -16,6 +16,8 @@ is the one place allowed to know what is actually being run.
 
 from pathlib import Path
 
+from loguru import logger
+
 from core.config import AppConfig, ConfigError, PoolPersona, config_for_persona
 from core.engine import Engine
 from core.records import CallStore, NullCallStore, RecordWriter
@@ -56,6 +58,17 @@ def create_engine(config: AppConfig, records: RecordWriter | None = None) -> Eng
     instances are not shared between calls.
     """
     provider = config.engine.provider
+
+    if provider == "silent":
+        # Load-testing only. Imported here rather than at module level so the
+        # normal path pays nothing for it.
+        from engine.silent_engine import SilentEngine
+
+        logger.warning(
+            "engine.provider is 'silent' -- callers will hear NOTHING. "
+            "This mode exists to measure capacity, not to serve calls."
+        )
+        return SilentEngine()
 
     if provider == "pipecat":
         from engine.pipecat_engine import PipecatEngine

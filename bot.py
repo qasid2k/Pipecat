@@ -369,7 +369,20 @@ async def main(config: AppConfig):
             host=config.service.api.host, port=config.service.api.port,
             tenant_id=config.service.tenant_id,
         )
-        await api.start()
+        try:
+            await api.start()
+        except OSError as e:
+            # The API only observes. Refusing to answer phone calls because a
+            # monitoring port is taken -- by a stale process, or an SSH tunnel
+            # someone left open -- would be the observation breaking the thing
+            # observed, which is the one thing it must never do. Same rule as
+            # the record writer and the live-call registry.
+            logger.error(
+                f"API could not start on {config.service.api.host}:"
+                f"{config.service.api.port} ({e}). Continuing WITHOUT it -- "
+                "no dashboard and no /metrics until the port is free."
+            )
+            api = None
 
     stop = asyncio.Event()
     force = asyncio.Event()

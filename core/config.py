@@ -190,7 +190,16 @@ def _load_transport(data: dict, env: _Env) -> TransportConfig:
 VALID_STT = {"deepgram"}
 VALID_LLM = {"google"}
 VALID_TTS = {"deepgram"}
-VALID_ENGINES = {"pipecat"}
+# "silent" answers and says nothing, opening no provider connections. It exists
+# so the machine's call ceiling can be measured without buying N Deepgram and N
+# Gemini streams per run -- see engine/silent_engine.py. Never use it to serve
+# real callers; they would hear nothing at all.
+#
+# Named "silent" rather than "null" on purpose: YAML parses a bare `null` as a
+# NULL VALUE, so `provider: null` would arrive here as None and fail with a
+# confusing message. "silent" also describes what the caller experiences, which
+# is the more useful thing for the person editing the file to know.
+VALID_ENGINES = {"pipecat", "silent"}
 VALID_VAD = {"silero"}
 
 

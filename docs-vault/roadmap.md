@@ -90,12 +90,20 @@ records, and reports. What that confirms is the *path*: calls are served, rows
 are written, the dashboard shows them. It does not by itself confirm the
 fine-grained items still listed in §4 below, which need looking at specifically
 rather than in passing.
-- [ ] **E — Measure the ceiling.** *Gates F.* **Limits 1 and 3 fixed and
-      measured** ([[decisions]] 046). Still to do: the load harness, the ramp to
-      N_max, CPU/memory per call, and the provider limits in [[runbook]] §4.
-      One residual worth knowing before designing the harness: 8 VAD builds at
-      once still stall the loop ~426 ms, so **burst arrival is the shape of the
-      problem, not sustained load** — the harness must ramp *and* spike.
+- [ ] **E — Measure the ceiling.** *Gates F.* **Mostly done.** Limits 1 and 3
+      fixed and measured ([[decisions]] 046, 047). `tools/loadtest.py` drives
+      synthetic AudioSocket callers and judges by the bot's own `/metrics`;
+      `engine.provider: silent` makes a run free ([[decisions]] 048). First
+      numbers on the dev laptop: **ramp to 40 and a spike of 60, both clean** —
+      past the old 32-worker wall ([[decisions]] 049).
+      **Still to do, and these are the numbers that actually decide Stage F:**
+      - [ ] the same runs **on the VM**, which is the machine that serves calls
+      - [ ] a **burst** test with the *real* engine — the silent one builds no
+            VAD, so a spike against it is easier than a real one
+      - [ ] CPU and memory per concurrent call
+      - [ ] the **provider limits** in [[runbook]] §4, still blank. If Deepgram
+            or Gemini caps below the machine, that is the real ceiling and
+            everything above is academic.
 - [ ] **F — Horizontal scale.** `AgentPool` keeps its interface and gains a Redis
       backing store; the existing pool tests become the contract. Call
       distribution and media routing decided from measured numbers, not now.

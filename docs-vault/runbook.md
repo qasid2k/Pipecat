@@ -605,6 +605,49 @@ rules. The two worth alerting on:
 | `voiceagent_records_dropped_total` | the analytics are quietly going incomplete |
 | `voiceagent_calls_rejected_total` | callers turned away at capacity |
 
+### Load testing — finding this machine's ceiling
+
+`tools/loadtest.py` pretends to be Asterisk: each virtual caller opens an
+AudioSocket connection, announces a UUID, then sends a frame every 20 ms and
+drains what comes back. The bot cannot tell the difference.
+
+**Set up a load config** (`config.local.yaml` is git-ignored):
+
+```bash
+cp config.yaml config.local.yaml
+```
+
+Then edit three things:
+1. `engine.provider: silent` — answers and says nothing, opening **no Deepgram
+   or Gemini streams**. Without this, every virtual caller costs real money.
+2. `pool.personas` — add enough entries that the pool is never the limit. With
+   the silent engine the prompts and voices are never used, so copies are fine.
+   **If the roster is smaller than the test level, you measure the pool, not the
+   machine** — the tool says so when that happens.
+3. `service.records.path` / `service.log.file` — point somewhere disposable so a
+   load run does not pollute real call records.
+
+**Run it:**
+
+```bash
+python bot.py config.local.yaml          # one terminal
+python tools/loadtest.py --ramp 40 --step 8 --every 3 --duration 10   # another
+python tools/loadtest.py --spike 30 --duration 15
+```
+
+Ramp finds the *sustained* ceiling; spike finds the *burst* ceiling. Both are
+needed — this service's known weak point is burst arrival.
+
+**Reading it.** Trust the bot's numbers, not the harness's: they come from
+`/metrics`. `frames dropped` or `pacer slips` above zero means the ceiling was
+passed, and **the last clean level is the answer**, not the level that broke.
+
+> **What this number is not.** It is a transport-layer *upper bound*. It opens no
+> provider streams, so Deepgram and Gemini limits are untested — real capacity is
+> this or theirs, whichever is lower. And the silent engine builds no pipeline,
+> so it never constructs a VAD: a spike here is **easier** than a real one
+> ([[decisions]] 047). Quote it with both caveats or not at all.
+
 ### Checking the record store without a phone
 
 ```bash

@@ -1264,3 +1264,85 @@ which is a fact the load harness has to be designed around: it must spike as wel
 as ramp. If bursts turn out to matter in practice, the next step is a small pool
 of pre-built analyzers refilled in the background, which removes the cost from
 the call path entirely at the price of some complexity and a reset question.
+
+---
+
+## 048 — A second engine exists, and it is a silent one
+*Date: 2026-09-10*
+
+**Decision.** `engine.provider: silent` selects `SilentEngine`, which answers,
+reads the caller's audio, returns silence, and opens no provider connections. It
+exists to make load testing affordable.
+
+**Why this reopens a closed item.** [[roadmap]] §3 lists "a second `Engine`
+implementation" as deliberately not built, with the trigger *"a real requirement
+appears"*. This is that requirement: Stage E has to find the machine's call
+ceiling, and doing it through the real engine would open N Deepgram and N Gemini
+streams per run — real money, and it would measure the *accounts* rather than the
+*machine*. Those are two different questions and both deserve an answer, so they
+are now asked separately.
+
+**How much it proves about portability.** Some, but modestly, and it should not
+be oversold. It demonstrates the `Engine` seam is *usable* — a second
+implementation dropped in behind `create_engine` with no change to `bot.py`,
+`core/pool.py` or any transport, and `tests/test_layering.py` still passes. It
+does **not** demonstrate that a full alternative conversation stack would drop
+in, because this one has no STT, no LLM, no TTS and no pipeline. The honest
+caveat stands: whole-engine portability remains designed for rather than proven.
+
+**Why "silent" and not "null".** YAML parses a bare `null` as a **null value**,
+so `provider: null` arrives at the loader as `None` and fails with a message
+about `'None'` not being supported. Found by writing it that way and watching it
+break. "silent" is also the more useful name for whoever edits the file: it says
+what the caller experiences.
+
+**Consequences.** Selecting it logs a WARNING, because a config left in this mode
+serves real callers total silence. The factory imports it lazily, so the normal
+path pays nothing. It measures a **transport-layer upper bound only** — see
+[[decisions]] 049 for what that number does and does not include.
+
+---
+
+## 049 — The load ceiling is measured, and stated with its limits
+*Date: 2026-09-10*
+
+**Decision.** `tools/loadtest.py` drives synthetic AudioSocket callers at the
+bot and reports the last level that stayed clean, judged by the bot's own
+`/metrics` rather than by the harness.
+
+**First measurements** (Windows dev laptop, silent engine — the VM's numbers are
+the ones that matter and are still to be taken):
+
+| Test | Result |
+|---|---|
+| Ramp 8 → 40 concurrent | clean throughout, 300/300 frames returned |
+| Spike 60 at once | clean, no dropped frames, no pacer slips |
+
+Notably **past 32**, which is where the old thread-pool design would have hit the
+`min(32, cpu+4)` worker wall — direct evidence that [[decisions]] 046 did what it
+claimed.
+
+**What the number excludes, and why saying so matters more than the number.**
+
+1. **No provider streams.** Deepgram and Gemini concurrency caps are untested,
+   and remain unmeasured ([[runbook]] §4). Real capacity is this or theirs,
+   whichever is lower.
+2. **No VAD.** The silent engine builds no pipeline, so it never constructs a
+   `SileroVADAnalyzer` — the one per-call setup step expensive enough to stall
+   the loop when calls land together ([[decisions]] 047). **A spike test here is
+   therefore easier than a real spike**, and the burst ceiling is still unknown.
+3. **Degradation detection is unproven.** Nothing in these runs got far enough to
+   drop a frame, so the harness's "DEGRADED" path has not been seen firing
+   against a real overload. It works in the sense that it reads the right
+   counters; it has not been shown to trip.
+
+**A reporting bug the first run caught.** The harness initially called a level
+"DEGRADED" when the pool refused the extra callers — reporting correct capacity
+behaviour as a machine limit, and stopping at the roster size. It now
+distinguishes "AT CAPACITY (raise pool.personas)" from real degradation, and
+discounts exactly the failures explained by rejections. Without that fix the tool
+would have confidently reported a ceiling of 3.
+
+**Consequences.** Any figure quoted from this must carry both caveats. The number
+that decides fleet sizing in Stage F is the VM's, under the real engine, for
+bursts — not a laptop's, under a silent one, for ramps.
