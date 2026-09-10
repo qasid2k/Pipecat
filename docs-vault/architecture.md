@@ -61,8 +61,8 @@ import. The adapter imports no Pipecat; the engine imports no Asterisk.
 | `bot.py` | Entry point and wiring: get a transport, get the pool, give each call a free agent, guarantee cleanup. `run_call` is the **only** path a call can take. |
 | `tests/test_pool.py` | `AgentPool` unit tests (16). Stdlib `unittest` — see [[decisions]] 030. |
 | `tests/test_call_loop.py` | `run_call` wiring tests (10): distinct personas, per-call engines, rejection at capacity, and release on every failure path. |
-| `audiosocket_server.py` | Earlier standalone echo/test server. Superseded by `bot.py`. |
-| `ari_test.py`, `ari_media_test.py`, `nettest_*.py` | Throwaway probes used to prove ARI and the network path. Not part of the running system. |
+| `probes/` | Standalone diagnostic programs, each proving **one layer in isolation** — raw TCP, ARI control, ARI + External Media, the AudioSocket protocol. Not part of the running system; nothing imports them. Kept because they are the fastest way to find *which* layer is at fault. See `probes/README.md`. |
+| `tools/` | Operational helpers: `check_store.py` (exercise the record store with no phone call), `loadtest.py` (drive synthetic callers, find the ceiling). |
 
 Runs as **one process**: the asyncio event loop hosts the ARI controller and all
 call pipelines; each call additionally owns two OS threads for socket I/O.

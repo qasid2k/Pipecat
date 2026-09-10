@@ -25,16 +25,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Modules that are development scratch tools, not part of the running service.
-# They are allowed to do as they please; they are not imported by anything.
-EXCLUDED = {
-    "audiosocket_server.py",  # superseded standalone echo server
-    "ari_test.py",
-    "ari_media_test.py",
-    "nettest_client.py",
-    "nettest_server.py",
-    "bot_backup.py",
-}
+# Directories that are not the running service. `probes/` holds standalone
+# diagnostic programs (see probes/README.md) -- nothing imports them and they
+# import nothing from the repo, so the layering rules do not apply to them.
+EXCLUDED_DIRS = {".venv", "__pycache__", "build", "dist", "tests", "probes"}
 
 
 def python_files() -> list[Path]:
@@ -42,10 +36,7 @@ def python_files() -> list[Path]:
     found = []
     for path in REPO.rglob("*.py"):
         rel = path.relative_to(REPO)
-        parts = set(rel.parts)
-        if parts & {".venv", "__pycache__", "build", "dist", "tests"}:
-            continue
-        if rel.name in EXCLUDED:
+        if set(rel.parts) & EXCLUDED_DIRS:
             continue
         found.append(path)
     return found
