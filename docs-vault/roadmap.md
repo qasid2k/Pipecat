@@ -93,15 +93,16 @@ rather than in passing.
 - [ ] **E — Measure the ceiling.** *Gates F.* **Mostly done.** Limits 1 and 3
       fixed and measured ([[decisions]] 046, 047). `tools/loadtest.py` drives
       synthetic AudioSocket callers and judges by the bot's own `/metrics`;
-      `engine.provider: silent` makes a run free ([[decisions]] 048). Numbers so
-      far ([[decisions]] 049): dev laptop ramp to 40 and spike of 60, both
-      clean; **VM ramp to 40, clean** — past the old 32-worker wall. The VM run
-      also found [[bugs]] B-014, a persona leak invisible to manual testing.
-      **`40` is a FLOOR, not a ceiling: it was the top of the ramp and nothing
-      degraded, so the breaking point is still unknown.**
+      `engine.provider: silent` makes a run free ([[decisions]] 048).
+      **MEASURED ON THE VM: 50 concurrent callers clean, degraded by 75**
+      ([[decisions]] 049). Past the old 32-worker wall, and the run that found
+      it also found [[bugs]] B-014 — a persona leak invisible to manual testing.
       **Still to do, and these are the numbers that actually decide Stage F:**
-      - [ ] push the VM ramp until something *does* degrade — 12 nodes or 3 for
-            500 concurrent depends on whether one node does 40 or 200
+      - [ ] narrow 50–75 with a finer step, if the exact edge matters
+      - [ ] **what capacity looks like with the REAL engine** — this figure has
+            no STT, LLM, TTS or VAD, all of which are CPU-heavy per call, so
+            real capacity is **well below 50** and that is the number Stage F
+            must size against
       - [ ] a **burst** test with the *real* engine — the silent one builds no
             VAD, so a spike against it is easier than a real one
       - [ ] CPU and memory per concurrent call

@@ -1346,3 +1346,42 @@ would have confidently reported a ceiling of 3.
 **Consequences.** Any figure quoted from this must carry both caveats. The number
 that decides fleet sizing in Stage F is the VM's, under the real engine, for
 bursts — not a laptop's, under a silent one, for ramps.
+
+---
+
+## 050 — The VM's transport ceiling is 50 concurrent calls
+*Date: 2026-09-10*
+
+**Measured.** Ramping synthetic AudioSocket callers against the VM with
+`engine.provider: silent`:
+
+| Level | Result |
+|---|---|
+| up to **50** | clean — no dropped frames, no pacer slips |
+| **75** | degraded |
+
+The exact edge is somewhere in 51–75; the ramp stepped by 25. 50 is the number
+to plan with, because it is the last level *observed* clean.
+
+**What this is.** The transport layer: accept, UUID correlation, the pool, two
+OS threads per call, 20 ms write pacing and its back-pressure, the record write,
+teardown. Nothing else.
+
+**What it is not, and this matters more than the figure.** It has **no STT, no
+LLM, no TTS and no VAD** — every one of which is CPU-heavy and per call. Real
+capacity with the actual engine is **well below 50**, and that lower number is
+the one Stage F must size a fleet against. Quoting 50 as "the VM's capacity"
+would be wrong by an unknown and probably large factor.
+
+**What is likely binding at 75.** Two OS threads per call means 150 threads at
+that level, and each write thread wakes fifty times a second — roughly 3,750
+wakeups a second on top of the event loop's own work. That is limit #2 on the
+list in §2 and it is the next one to hit, exactly as predicted. Getting past it
+means changing the thread model, which [[decisions]] 001 exists to warn against:
+those threads are why calls stopped dropping in the first place. Not a change to
+make for headroom we have not yet proven we need.
+
+**Consequences for the target.** 500 concurrent is **at least 10 nodes** at the
+transport layer alone, and more once the engine is included. If that ratio is
+unattractive, the lever is not more nodes but cheaper calls per node — which
+means the per-call cost of the engine, not the transport.
