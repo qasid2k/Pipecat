@@ -47,9 +47,9 @@ the pool. In the order it will actually bite:
 
 | # | Limit | Where | Bites around |
 |---|---|---|---|
-| 1 | **Default `ThreadPoolExecutor`** — every 20 ms output frame goes through `run_in_executor(None, …)`, pool sized `min(32, cpu+4)`, never configured | `transports/asterisk.py` `write_audio` | **low tens** |
+| ~~1~~ | ~~Default `ThreadPoolExecutor`~~ — **FIXED 2026-09-10.** Every 20 ms frame used to block a pool worker; `queue_output` now waits on the event loop instead. Back-pressure preserved and pinned by 7 tests. | `transports/audiosocket.py` | — |
 | 2 | **2 OS threads per call**, one waking 50×/s | `transports/audiosocket.py` | tens |
-| 3 | **Per-call Silero VAD load** (~0.4 s ONNX, on the loop), stacks in bursts | `engine/pipecat_engine.py` | tens, in bursts |
+| ~~3~~ | ~~Per-call Silero VAD load~~ — **REDUCED 2026-09-10.** Measured at **170 ms** warm (not the ~0.4 s claimed here; that was the cold first load). Now built via `asyncio.to_thread`: worst loop stall for 8 concurrent builds went **1398 ms → 426 ms**. Not eliminated — onnxruntime holds the GIL for part of session creation. | `engine/pipecat_engine.py` | still a burst-arrival cost |
 | 4 | **Provider quotas** — one Deepgram key, one Gemini key, limits unknown | shared credentials | unknown — could be first |
 | 5 | **One event loop** — a stall drops calls; it has twice | whole process | any time |
 
@@ -90,9 +90,12 @@ records, and reports. What that confirms is the *path*: calls are served, rows
 are written, the dashboard shows them. It does not by itself confirm the
 fine-grained items still listed in §4 below, which need looking at specifically
 rather than in passing.
-- [ ] **E — Measure the ceiling.** *Gates F.* Fix limits 1 and 3, build a load
-      harness, ramp until `DROPPED`/`slips` appear. Record CPU and memory per
-      call and N_max. Fill in the provider limits in [[runbook]] §4.
+- [ ] **E — Measure the ceiling.** *Gates F.* **Limits 1 and 3 fixed and
+      measured** ([[decisions]] 046). Still to do: the load harness, the ramp to
+      N_max, CPU/memory per call, and the provider limits in [[runbook]] §4.
+      One residual worth knowing before designing the harness: 8 VAD builds at
+      once still stall the loop ~426 ms, so **burst arrival is the shape of the
+      problem, not sustained load** — the harness must ramp *and* spike.
 - [ ] **F — Horizontal scale.** `AgentPool` keeps its interface and gains a Redis
       backing store; the existing pool tests become the contract. Call
       distribution and media routing decided from measured numbers, not now.

@@ -124,10 +124,13 @@ class AsteriskCallSession(CallSession):
         return await self._io.incoming.get()
 
     async def write_audio(self, pcm: bytes) -> None:
-        """Hand one frame to the write thread. Blocks (async) to pace playback."""
-        await asyncio.get_event_loop().run_in_executor(
-            None, self._io.queue_output, pcm
-        )
+        """Hand one frame to the write thread. Waits (async) to pace playback.
+
+        The waiting is deliberate and load-bearing: it is what stops the agent
+        producing audio faster than the caller can hear it. It no longer parks a
+        thread-pool worker to do it -- see AudioSocketConnection.queue_output.
+        """
+        await self._io.queue_output(pcm)
 
     async def transfer(self, destination: str) -> bool:
         """Send the caller back into the dialplan at [transfer] <destination>.

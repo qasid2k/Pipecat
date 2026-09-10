@@ -128,6 +128,11 @@ class AudioSocketConnection:
         self.frames_dropped = 0
         self.frames_out = 0
         self.frames_out_real = 0
+        # Set by the write thread every time it takes a frame off _outgoing, so
+        # queue_output() can wait on the event loop instead of parking a thread.
+        # Starts set: the queue begins empty.
+        self._space = asyncio.Event()
+        self._space.set()
         # Times the 20 ms write pacer fell more than 100 ms behind and had to
         # resync. The outbound twin of frames_dropped: it means the agent's
         # speech was not delivered at real time, which the caller hears as
@@ -170,6 +175,20 @@ class AudioSocketConnection:
         try:
             self._sock.close()
         except OSError:
+            pass
+
+    def _signal_space(self):
+        """Tell the asyncio side there is room on the outgoing queue.
+
+        Called from the WRITE THREAD, so it must go through the loop rather than
+        touching the Event directly -- asyncio primitives are not thread-safe.
+        `call_soon_threadsafe` is also correct when called from the loop itself,
+        which is why `flush_output` can use the same path.
+        """
+        try:
+            self._loop.call_soon_threadsafe(self._space.set)
+        except RuntimeError:
+            # The loop is closing; nothing is waiting on this any more.
             pass
 
     def _signal_end(self, reason: str):
@@ -245,6 +264,10 @@ class AudioSocketConnection:
                 try:
                     payload = self._outgoing.get_nowait()
                     is_real = True
+                    # Room has appeared. Wake whoever is waiting to hand us the
+                    # next frame -- this is what replaces the blocking put() and
+                    # the thread-pool worker it used to occupy.
+                    self._signal_space()
                 except queue.Empty:
                     payload = SILENCE_FRAME  # keep Asterisk's lockstep loop alive
                     is_real = False
@@ -291,17 +314,58 @@ class AudioSocketConnection:
         except Exception as e:  # noqa: BLE001
             self._signal_end(f"write loop crashed: {e!r}")
 
-    def queue_output(self, payload: bytes):
-        """Called from the asyncio side. Blocks (in a worker thread) when the
-        outgoing queue is full -- that back-pressure is what paces the agent's
-        speech to real time and keeps Pipecat's timing accurate."""
-        self._outgoing.put(payload)
+    async def queue_output(self, payload: bytes) -> None:
+        """Hand one frame to the write thread, waiting if it is behind.
+
+        THE BACK-PRESSURE IS THE POINT, and it must survive any change here.
+        The outgoing queue holds 3 frames = 60 ms. When it is full this waits,
+        which is what paces the agent's speech to real time and keeps Pipecat's
+        timing honest ([[decisions]] 002). Dropping frames instead, or growing
+        the queue, would let the agent "speak" faster than the caller can hear.
+
+        WHY THIS IS NOT `run_in_executor(None, queue.put)` ANY MORE
+        ----------------------------------------------------------
+        It used to be, and that was the first hard capacity wall in the service.
+        A blocking `put` in the default thread pool occupies a worker for as
+        long as it waits -- up to 20 ms, every frame, 50 times a second, per
+        call. The pool is `min(32, cpu+4)` threads and is shared with everything
+        else that uses `run_in_executor`, so at a few tens of concurrent calls
+        the workers are all parked in `put()` and unrelated work starves behind
+        them. It also cost a queue hop and two context switches per frame for
+        what is, in the common case, one non-blocking append.
+
+        Now the waiting happens on the event loop: the write thread sets
+        `_space` every time it consumes a frame, so this sleeps until there is
+        genuinely room and costs nothing while it waits. No thread, no pool, no
+        ceiling that arrives at 32.
+        """
+        while True:
+            # Cleared BEFORE the attempt, not after a failure. If the write
+            # thread consumes between a failed put and the wait, the set() would
+            # land on an event we then cleared, and this frame would sit here
+            # until the next consume 20 ms later. Clearing first makes that
+            # ordering impossible.
+            self._space.clear()
+            try:
+                self._outgoing.put_nowait(payload)
+                return
+            except queue.Full:
+                await self._space.wait()
 
     def flush_output(self):
-        """Drop any buffered agent audio (used on barge-in / interruption)."""
+        """Drop any buffered agent audio (for barge-in / interruption).
+
+        Not currently wired to anything -- the queue is only 3 frames, so an
+        interruption loses at most 60 ms of already-committed audio, which is
+        below what a caller notices. Kept because it is the right hook if
+        barge-in ever needs to be tighter.
+        """
         try:
             while True:
                 self._outgoing.get_nowait()
         except queue.Empty:
             pass
+        # Emptying the queue is exactly the condition a waiting writer is
+        # blocked on; forgetting this would hang the next frame for 20 ms.
+        self._signal_space()
 

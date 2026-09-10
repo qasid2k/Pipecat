@@ -237,7 +237,34 @@ class PipecatEngine(Engine):
             )
         )
 
-    def _build_pipeline(self, transport: CallSessionTransport, recorder: TranscriptRecorder):
+    @staticmethod
+    async def _build_vad() -> SileroVADAnalyzer:
+        """Construct this call's VAD analyzer OFF the event loop.
+
+        Measured at ~170 ms per call on the dev machine (~460 ms for the very
+        first, which loads the model file). Constructed inline that is 170 ms of
+        blocked event loop per call, and it stacks: ten calls arriving together
+        would block the loop for nearly two seconds -- far past what Asterisk
+        tolerates before it abandons a call ([[bugs]] B-001, B-011).
+
+        A THREAD, NOT A SHARED ANALYZER. The obvious optimisation is to build one
+        and reuse it, but Silero is stateful -- it carries the recurrent state of
+        whoever is speaking. Sharing it would make two concurrent callers
+        interrupt each other's turn detection, which is precisely the
+        cross-contamination the per-call engine exists to prevent. Each call
+        still gets its own; it is just no longer built on the loop.
+
+        onnxruntime does most of this work in C++ with the GIL released, so the
+        thread genuinely runs in parallel rather than merely deferring the cost.
+        """
+        return await asyncio.to_thread(SileroVADAnalyzer)
+
+    def _build_pipeline(
+        self,
+        transport: CallSessionTransport,
+        recorder: TranscriptRecorder,
+        vad: SileroVADAnalyzer,
+    ):
         """Assemble the STT -> LLM -> TTS pipeline from configuration.
 
         Returns the pipeline AND the context, because the context holds the full
@@ -263,7 +290,7 @@ class PipecatEngine(Engine):
         pipeline = Pipeline(
             [
                 transport.input(),
-                VADProcessor(vad_analyzer=SileroVADAnalyzer()),
+                VADProcessor(vad_analyzer=vad),
                 stt,
                 recorder,  # sits right after STT, so it sees every transcription
                 aggregators.user(),
@@ -320,7 +347,11 @@ class PipecatEngine(Engine):
         )
 
         transport = CallSessionTransport(session)
-        pipeline, context = self._build_pipeline(transport, recorder)
+        # Built before the pipeline and off the loop -- see _build_vad. This is
+        # the one construction step expensive enough to matter when several
+        # calls arrive at the same moment.
+        vad = await self._build_vad()
+        pipeline, context = self._build_pipeline(transport, recorder, vad)
         # Held in a variable rather than constructed inline: the transfer tool
         # writes the chosen department onto it, and the `finally` below reads it
         # back to fill in the call record.

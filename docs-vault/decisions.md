@@ -1195,3 +1195,72 @@ channel, and there is no authentication ([[decisions]] 043).
 framework and no CDN. It is served from memory by the API, on a VM that may have
 no outbound internet — and a dashboard that needs `npm` to change is a dashboard
 nobody changes. A test asserts it contains no external `<script src=>`.
+
+---
+
+## 046 — Outbound pacing waits on the event loop, not in a thread pool
+*Date: 2026-09-10*
+
+**Decision.** `AudioSocketConnection.queue_output` is now a coroutine that puts
+without blocking and, when the 3-frame outgoing queue is full, waits on an
+`asyncio.Event` the write thread sets each time it consumes a frame. It used to
+be `run_in_executor(None, queue.put)`.
+
+**Why.** The back-pressure itself is load-bearing and unchanged — it is what
+stops the agent producing audio faster than the caller can hear it
+([[decisions]] 002). What changed is where the waiting happens.
+
+A blocking `put` in the **default** thread pool occupies a worker for as long as
+it waits: up to 20 ms, per frame, fifty times a second, per call. That pool is
+`min(32, cpu+4)` threads and is shared with everything else in the process that
+calls `run_in_executor`. At a few tens of concurrent calls every worker is parked
+in `put()` and unrelated work starves behind them — so this was the **first hard
+capacity wall in the service**, and it arrived well before anything else on the
+list. It also cost a queue hop and two context switches per frame for what is,
+in the common case, one non-blocking append to a list.
+
+**The ordering that makes it correct.** `_space` is cleared *before* the put is
+attempted, not after it fails. If it were cleared after a failure, a consume
+landing between the failure and the wait would set an event we then cleared, and
+that frame would sit until the next 20 ms tick. Clearing first makes the sequence
+impossible. There is a test that simulates exactly that interleaving.
+
+**Consequences.** `_signal_space()` goes through `call_soon_threadsafe` because
+it is called from the write thread and asyncio primitives are not thread-safe;
+that also makes it safe from `flush_output`, which runs on the loop. 7 tests in
+`tests/test_backpressure.py` pin the behaviour that had to survive — including
+one asserting the executor is *not* used, and one putting 50 connections in the
+waiting state at once, which the old design could not do with 32 workers.
+
+---
+
+## 047 — The per-call VAD is built in a thread, not shared
+*Date: 2026-09-10*
+
+**Decision.** `SileroVADAnalyzer()` is constructed via `asyncio.to_thread`, one
+per call as before.
+
+**Why not share one.** The obvious optimisation is to build a single analyzer and
+reuse it. Silero is **stateful** — it carries the recurrent state of whoever is
+currently speaking — so a shared analyzer would have two concurrent callers
+interrupting each other's turn detection. That is exactly the cross-contamination
+the per-call engine exists to prevent, and it would show up as callers being cut
+off at random under load, which is close to undiagnosable. Isolation wins.
+
+**What the measurement actually said.** The roadmap claimed ~0.4 s per call. That
+was wrong: 0.4 s is the *first* construction, which loads the model file. Warm,
+it is **~170 ms**. Worth fixing anyway, because it stacks — ten calls arriving
+together is nearly two seconds of blocked event loop, far past what Asterisk
+tolerates before abandoning a call ([[bugs]] B-001, B-011).
+
+Moving it to a thread cut the worst loop stall for 8 concurrent builds from
+**1398 ms to 426 ms**. Wall-clock time went slightly *up* (1.40 s → 1.68 s),
+which is the expected trade: the same work, arranged so the loop can breathe.
+
+**The residual, stated plainly.** 426 ms is still a long stall. onnxruntime holds
+the GIL for part of session creation, so the threads do not run fully in
+parallel. **Burst arrival, not sustained load, is the shape of this problem** —
+which is a fact the load harness has to be designed around: it must spike as well
+as ramp. If bursts turn out to matter in practice, the next step is a small pool
+of pre-built analyzers refilled in the background, which removes the cost from
+the call path entirely at the price of some complexity and a reset question.
