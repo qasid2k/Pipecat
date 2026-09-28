@@ -212,6 +212,11 @@ Review notes:
     wasn't a 0-second wait.
   HOW TO TEST ON THE VM (`git pull`, then restart bot.py: Ctrl+C once, wait for
   `stopped cleanly`, start it again)
+  QUICK WAY: after the calls below, run
+     python tools/check_greeting_timing.py --since-minutes 10
+  on the VM. It prints each call's steps, the slowest step, the /metrics
+  count, and PASS/FAIL. (`--originate 3 --context <ctx>` places the calls for
+  you through Asterisk.)
   1. Make 3 calls to 6001, each long enough to hear the greeting.
   2. grep "setup:" in the console or logs/agent.jsonl. Each call shows a line like
      `setup: connected→correlated 40 ms | correlated→engine_start 5 ms |
