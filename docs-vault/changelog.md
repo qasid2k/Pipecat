@@ -6,6 +6,12 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-28 — A supervised improvement loop
+`/improve` proposes features into [[backlog]], builds only the ones you approve,
+each on its own branch behind a backup tag, and never merges ([[decisions]] 051).
+Every iteration is logged in [[improvement-log]]. Rollback is [[runbook]] §8.
+No product code changed.
+
 ## 2026-09-10 — Stage D: a control plane and a live dashboard
 `/health`, `/pool`, `/calls`, `/metrics`, `WS /live`, and a supervisor page at
 `/` — in-process, read-only, loopback.

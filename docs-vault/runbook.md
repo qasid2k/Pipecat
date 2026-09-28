@@ -805,3 +805,40 @@ what make it bearable to listen to.
 2. Describe it in the tool's `department` description so the LLM can choose it.
 3. **Add the matching `<name>,1,...` entry to the `[transfer]` dialplan context**,
    including its `DIALSTATUS` branch. Skipping this is a silent failure.
+
+---
+
+## 8. Rolling back
+
+Every version you might want back has a name ([[decisions]] 051):
+
+| Tag / branch | Made by | Marks |
+|---|---|---|
+| `improve/IMP-###-…` | the loop | one improvement, not yet merged |
+| `backup/<date>-pre-IMP-###` | the loop, before each build | the base exactly as it was before that item |
+| `release/<date>` | **you**, after each merge | a version you have live-checked. **This is what the VM rolls back to.** |
+
+List them: `git tag -l "backup/*" "release/*"` and `git branch -l "improve/*"`.
+
+**Throw away an unmerged item.** Do nothing, or `git branch -D improve/IMP-###-…`
+and set it to `REJECTED` in [[backlog]]. The base was never touched.
+
+**Undo a merged item, keeping history** (preferred):
+```
+git log --oneline --merges          # find the merge
+git revert -m 1 <merge-sha>         # new commit that undoes it
+```
+
+**Put the VM back on a known-good version** (while a release is broken):
+```
+git fetch --tags
+git checkout release/<date>         # detached HEAD, on purpose
+# restart bot.py (Ctrl+C once lets it drain; see §3)
+```
+Then check Asterisk as well as the app, because the app's own `N/N free` line is
+not proof ([[bugs]] B-012): `core show channels` and `group show channels` should
+both be empty when idle. Go back with `git checkout <base branch>` once the fix
+is merged.
+
+**Tags are local until you push them** (`git push origin release/<date>`). Push
+`release/*` tags so the VM can fetch them. `backup/*` tags can stay local.

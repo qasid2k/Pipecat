@@ -1385,3 +1385,46 @@ make for headroom we have not yet proven we need.
 transport layer alone, and more once the engine is included. If that ratio is
 unattractive, the lever is not more nodes but cheaper calls per node — which
 means the per-call cost of the engine, not the transport.
+
+---
+
+## 051 — The improvement loop proposes and builds, but never approves or merges
+*Date: 2026-09-28*
+
+**Decision.** `/improve` (`.claude/commands/improve.md`) runs one iteration at a
+time, by hand or under `/loop`. It either **proposes** up to three items into
+[[backlog]], or **builds** one item the human has marked `APPROVED`: on its own
+`improve/*` branch, tests first, behind a `backup/*` tag. The human approves,
+reviews, runs the live check, and merges. The loop never pushes, merges, or
+commits to the base branch.
+
+**Why a human sits in the loop.** The bugs that mattered most here were found on
+live calls, not by tests: B-011 (37 s of silence after a restart), B-012 (callers
+abandoned to silence with their group slot held), B-014 (a persona leak seen only
+under load). No offline gate can make a phone call, so "tests pass" is necessary
+but not sufficient. An auto-merging loop would ship exactly the class of bug this
+project keeps meeting. Approval also keeps the product direction a human
+decision: the loop can suggest what a call centre needs, but not choose it.
+
+**Why these guard rails.**
+* *Refuse on a dirty tree or a red baseline.* Otherwise the loop mixes its work
+  with the human's uncommitted changes, or builds on something already broken
+  and blames its own change.
+* *The test count may only rise.* It is the cheapest way to stop a loop "fixing"
+  a failure by deleting the test that caught it.
+* *One item, at most ~400 lines.* A review the human can actually do, and a
+  revert that removes one idea, not three.
+* *No paid or live runs.* The real-engine load test costs money and the VM takes
+  real calls. The silent engine ([[decisions]] 048) is the free substitute.
+* *`backlog.md` is never committed by the loop.* It is the human's control
+  surface. If the loop committed it, a status the human set could be overwritten
+  by a branch switch.
+
+**Backups are three layers:** the branch (the base is untouched until a merge),
+the `backup/<date>-pre-IMP-###` tag taken before every build, and a
+`release/<date>` tag the human takes after each merge, which is what the VM
+rolls back to ([[runbook]] §8).
+
+**Reopen when** the offline gates can catch what live calls catch today, e.g. a
+synthetic-caller test with the real engine run in CI. Until then, merging stays
+manual.

@@ -195,3 +195,5 @@ Identified as missing, in the order I would write them:
 * Answering something in §4 → replace the question with the answer, here and in
   whichever note owns it.
 * Reversing a decision → [[decisions]] is **append-only**. Supersede, never edit.
+* Improvement ideas, new or from this note → [[backlog]], worked by `/improve`
+  ([[decisions]] 051). An item from §3 still needs its trigger to have fired.
