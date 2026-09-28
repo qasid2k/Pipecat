@@ -88,6 +88,15 @@ engine:
     # inference every utterance, which we don't need since Silero VAD already
     # reports speech boundaries. true = use it instead of the timeout above.
     smart_turn_v3: false
+    # A caller who goes quiet gets checked on instead of cut off in silence:
+    # after this many seconds without speech the agent says `reprompt_text`, up
+    # to `max_reprompts` times, then says `goodbye_text` and ends the call. Any
+    # speech from the caller resets the count. 0 = off (the old behaviour: just
+    # the idle_timeout_s cut-off below). Must be shorter than idle_timeout_s.
+    reprompt_after_s: 10
+    max_reprompts: 2
+    reprompt_text: Are you still there?
+    goodbye_text: I haven't heard from you, so I'll end the call now. Please call back any time. Goodbye.
 
   # --- Defaults every persona inherits ---
   # WHICH ONE WINS: with a `pool:` block below, every call is served by a POOL
@@ -104,7 +113,8 @@ engine:
     # Spoken immediately on answer, so the caller never hears silence.
     greeting: Hi, this is Alex at Techbridge. How can I help you today?
 
-  # End the call after this much TOTAL silence. Any speech resets it. Pipecat's
+  # End the call after this much TOTAL silence. Any speech resets it -- the
+  # agent's check-ins above included, so with check-ins on this is a backstop. Pipecat's
   # own default is 5 minutes, which leaves dead test calls hanging around.
   idle_timeout_s: 30
   # How long to let the agent's "connecting you now" line play before actually

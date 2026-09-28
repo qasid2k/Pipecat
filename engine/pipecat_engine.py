@@ -33,7 +33,7 @@ from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import EndFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -57,6 +57,7 @@ from core.engine import Engine, EngineResult
 from core.records import RecordWriter
 from core.transport import CallSession
 from engine.session_transport import CallSessionTransport
+from engine.silence import SilenceAction, SilencePolicy
 from engine.transcripts import TranscriptRecorder, save_conversation
 
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
@@ -227,14 +228,22 @@ class PipecatEngine(Engine):
         plain silence timeout -- Silero VAD already reports speech boundaries, so
         N seconds of quiet after speech needs no model at all, and costs no CPU
         or latency on a box that drops calls when it stalls.
+
+        It also carries `user_idle_timeout`, which is what makes Pipecat raise
+        `on_user_turn_idle` for the silent-caller check-in (see run()). With
+        Smart Turn on and check-ins off, None keeps Pipecat's defaults exactly.
         """
         t = self._config.turn_taking
         if t.smart_turn_v3:
-            return None
+            if not t.reprompt_after_s:
+                return None
+            # user_turn_strategies=None is Pipecat's default, i.e. Smart Turn.
+            return LLMUserAggregatorParams(user_idle_timeout=t.reprompt_after_s)
         return LLMUserAggregatorParams(
             user_turn_strategies=UserTurnStrategies(
                 stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=t.silence_timeout_s)]
-            )
+            ),
+            user_idle_timeout=t.reprompt_after_s,
         )
 
     @staticmethod
@@ -268,7 +277,8 @@ class PipecatEngine(Engine):
         """Assemble the STT -> LLM -> TTS pipeline from configuration.
 
         Returns the pipeline AND the context, because the context holds the full
-        conversation and we want to save it when the call ends.
+        conversation and we want to save it when the call ends -- AND the user
+        aggregator, because that is what raises the silent-caller events.
         """
         stt = self._build_stt()
         llm = self._build_llm()
@@ -286,6 +296,7 @@ class PipecatEngine(Engine):
         aggregators = LLMContextAggregatorPair(
             context, user_params=self._build_user_params()
         )
+        user_aggregator = aggregators.user()
 
         pipeline = Pipeline(
             [
@@ -293,14 +304,14 @@ class PipecatEngine(Engine):
                 VADProcessor(vad_analyzer=vad),
                 stt,
                 recorder,  # sits right after STT, so it sees every transcription
-                aggregators.user(),
+                user_aggregator,
                 llm,
                 tts,
                 transport.output(),
                 aggregators.assistant(),
             ]
         )
-        return pipeline, context
+        return pipeline, context, user_aggregator
 
     async def run(self, session: CallSession) -> EngineResult:
         """Talk to this caller until the call ends.
@@ -351,7 +362,7 @@ class PipecatEngine(Engine):
         # the one construction step expensive enough to matter when several
         # calls arrive at the same moment.
         vad = await self._build_vad()
-        pipeline, context = self._build_pipeline(transport, recorder, vad)
+        pipeline, context, user_aggregator = self._build_pipeline(transport, recorder, vad)
         # Held in a variable rather than constructed inline: the transfer tool
         # writes the chosen department onto it, and the `finally` below reads it
         # back to fill in the call record.
@@ -374,6 +385,33 @@ class PipecatEngine(Engine):
             await session.ended.wait()
             cause["reason"] = f"call ended -- {session.end_reason}"
             await task.cancel(reason="call ended")
+
+        # The silent-caller check-in. Pipecat's idle timer starts each time the
+        # agent stops speaking and is cancelled by anyone speaking, so a spoken
+        # check-in restarts it by itself; `silence` only counts. Queued from the
+        # top of the pipeline, the same way the greeting is.
+        t = self._config.turn_taking
+        if t.reprompt_after_s:
+            silence = SilencePolicy(t.max_reprompts)
+
+            @user_aggregator.event_handler("on_user_turn_started")
+            async def on_caller_spoke(_aggregator, *_):
+                silence.caller_spoke()
+
+            @user_aggregator.event_handler("on_user_turn_idle")
+            async def on_caller_silent(_aggregator):
+                if silence.on_idle() is SilenceAction.REPROMPT:
+                    logger.info(f"Caller silent -- check-in {silence.reprompts}/{t.max_reprompts}")
+                    await task.queue_frames([TTSSpeakFrame(t.reprompt_text)])
+                    return
+                # Ending from inside the engine: EndFrame lets the goodbye play
+                # out first, then run() returns and run_call disconnects the
+                # caller and frees the agent, the same as any bot-ended call.
+                cause["reason"] = (
+                    f"caller silent -- no answer to {silence.reprompts} check-in(s)"
+                )
+                logger.info(f"Caller silent -- saying goodbye ({cause['reason']})")
+                await task.queue_frames([TTSSpeakFrame(t.goodbye_text), EndFrame()])
 
         watcher = asyncio.create_task(watch_for_hangup())
         try:

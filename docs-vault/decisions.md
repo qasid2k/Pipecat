@@ -1428,3 +1428,36 @@ rolls back to ([[runbook]] §8).
 **Reopen when** the offline gates can catch what live calls catch today, e.g. a
 synthetic-caller test with the real engine run in CI. Until then, merging stays
 manual.
+
+---
+
+## 052 — A silent caller is checked on by the engine, and the engine ends the call
+*Date: 2026-09-28 · item IMP-001 in [[backlog]]*
+
+**Decision.** When the caller has been silent for `reprompt_after_s`, the agent
+speaks a fixed check-in line, up to `max_reprompts` times, then a fixed goodbye,
+then ends the call with an `EndFrame`. It uses Pipecat's `user_idle_timeout` /
+`on_user_turn_idle`; the counting lives in `engine/silence.py`, free of Pipecat.
+
+**Why fixed lines, not the LLM.** A check-in has one job and must be fast and
+predictable; routing it through Gemini adds a round trip, a cost, and a chance
+of the model rambling or deciding to transfer. The lines are configurable
+(`reprompt_text`, `goodbye_text`), so a persona can reword them without code.
+
+**Why the engine ends the call rather than waiting for the idle timeout.** The
+goodbye would otherwise be followed by up to 30 s of silence, and the record
+would blame a generic timeout. Ending via `EndFrame` lets the goodbye play out,
+then `run()` returns normally and `run_call` disconnects the caller and frees
+the agent — the same path as every bot-ended call ([[bugs]] B-012), so no new
+teardown code.
+
+**Why a config error, not a warning,** for `reprompt_after_s >= idle_timeout_s`:
+agent speech resets the idle timeout, so the only way the hard timeout wins is
+if the first check-in is due after it — and then the feature silently never
+runs. That is the "I changed the config and nothing happened" failure the loader
+exists to prevent. (The proposal had a different formula,
+`reprompt_after_s × (max_reprompts+1)`; that was wrong, because each check-in
+resets the timer.)
+
+**Not proven offline:** that the event fires on real line silence, and how a
+check-in lands on a caller who was about to speak.

@@ -231,6 +231,15 @@ class TurnTakingConfig:
     vad: str = "silero"
     silence_timeout_s: float = 0.6
     smart_turn_v3: bool = False
+    # Check in on a caller who has gone quiet, instead of letting the idle
+    # timeout cut them off without a word (engine/silence.py). 0 = off.
+    reprompt_after_s: float = 10.0
+    max_reprompts: int = 2
+    reprompt_text: str = "Are you still there?"
+    goodbye_text: str = (
+        "I haven't heard from you, so I'll end the call now. "
+        "Please call back any time. Goodbye."
+    )
 
 
 @dataclass(frozen=True)
@@ -296,7 +305,13 @@ def _load_tts(data: dict, env: _Env) -> TTSConfig:
 
 def _load_turn_taking(data: dict) -> TurnTakingConfig:
     path = "engine.turn_taking"
-    d = _section(data, path, allowed={"vad", "silence_timeout_s", "smart_turn_v3"})
+    d = _section(
+        data, path,
+        allowed={
+            "vad", "silence_timeout_s", "smart_turn_v3",
+            "reprompt_after_s", "max_reprompts", "reprompt_text", "goodbye_text",
+        },
+    )
     defaults = TurnTakingConfig()
     timeout = _number(d.get("silence_timeout_s", defaults.silence_timeout_s), f"{path}.silence_timeout_s")
     if not 0.05 <= timeout <= 10:
@@ -304,10 +319,34 @@ def _load_turn_taking(data: dict) -> TurnTakingConfig:
             f"{path}.silence_timeout_s: {timeout} is out of range. Use roughly 0.3-2.0 "
             "seconds; below that the agent interrupts constantly, above it feels dead."
         )
+    reprompt_after = _number(
+        d.get("reprompt_after_s", defaults.reprompt_after_s), f"{path}.reprompt_after_s"
+    )
+    if reprompt_after != 0 and not 3 <= reprompt_after <= 300:
+        raise ConfigError(
+            f"{path}.reprompt_after_s: {reprompt_after} is out of range. Use 0 to turn "
+            "check-ins off, or 3-300 seconds; shorter than that nags a caller who is "
+            "just thinking."
+        )
+    max_reprompts = d.get("max_reprompts", defaults.max_reprompts)
+    if isinstance(max_reprompts, bool) or not isinstance(max_reprompts, int) or max_reprompts < 0:
+        raise ConfigError(
+            f"{path}.max_reprompts: expected a whole number of check-ins (0 or more), "
+            f"got {max_reprompts!r}"
+        )
+    texts = {}
+    for key in ("reprompt_text", "goodbye_text"):
+        value = d.get(key, getattr(defaults, key))
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"{path}.{key}: expected a sentence for the agent to say")
+        texts[key] = value.strip()
     return TurnTakingConfig(
         vad=_choice(d.get("vad", defaults.vad), f"{path}.vad", VALID_VAD),
         silence_timeout_s=timeout,
         smart_turn_v3=bool(d.get("smart_turn_v3", defaults.smart_turn_v3)),
+        reprompt_after_s=reprompt_after,
+        max_reprompts=max_reprompts,
+        **texts,
     )
 
 
@@ -369,14 +408,25 @@ def _load_engine(data: dict, env: _Env, base_dir: Path) -> EngineConfig:
         required={"provider", "stt", "llm", "tts"},
     )
     defaults = EngineConfig()
+    turn_taking = _load_turn_taking(d.get("turn_taking", {}))
+    idle_timeout = int(d.get("idle_timeout_s", defaults.idle_timeout_s))
+    # Agent speech resets the idle timeout, so each check-in buys the caller a
+    # fresh one. The hard timeout can only win if the FIRST check-in is due at
+    # or after it -- and then the feature would silently never run.
+    if turn_taking.reprompt_after_s and turn_taking.reprompt_after_s >= idle_timeout:
+        raise ConfigError(
+            f"engine.turn_taking.reprompt_after_s ({turn_taking.reprompt_after_s}) must be "
+            f"shorter than engine.idle_timeout_s ({idle_timeout}), or the call is cut "
+            "off before the agent ever checks in. Set it to 0 to turn check-ins off."
+        )
     return EngineConfig(
         provider=_choice(d["provider"], "engine.provider", VALID_ENGINES),
         stt=_load_stt(d["stt"], env),
         llm=_load_llm(d["llm"], env),
         tts=_load_tts(d["tts"], env),
-        turn_taking=_load_turn_taking(d.get("turn_taking", {})),
+        turn_taking=turn_taking,
         persona=_load_persona(d.get("persona", {}), base_dir),
-        idle_timeout_s=int(d.get("idle_timeout_s", defaults.idle_timeout_s)),
+        idle_timeout_s=idle_timeout,
         transfer_announce_s=_number(
             d.get("transfer_announce_s", defaults.transfer_announce_s),
             "engine.transfer_announce_s",

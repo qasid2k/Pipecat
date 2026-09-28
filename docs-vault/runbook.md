@@ -699,6 +699,7 @@ Artifacts land in `recordings/`:
 | `no UUID within 2s; treating as a non-ARI call` | The AudioSocket connection was not correlated to a channel: ARI down, or the External Media `data` UUID did not arrive. Transfer will be unavailable on that call. |
 | Nothing transcribed; VAD lines never appear | No caller audio is reaching the pipeline. Check the `in=` counter in the final log line. |
 | Call ends after exactly 30 s | `idle_timeout_secs=30` — total silence. The audio path is one-way or dead. |
+| Agent keeps asking "are you still there?", then says goodbye | The silent-caller check-in (`engine.turn_taking.reprompt_after_s`) — the caller's speech is not reaching VAD. Same diagnosis as the row above; the call record's cause reads `caller silent`. |
 | Gemini 404s | [[bugs]] B-008 — use a `-latest` alias. |
 
 Frame counters in the closing log line are the fastest diagnostic:

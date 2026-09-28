@@ -6,6 +6,22 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-28 — A silent caller gets checked on, not cut off (IMP-001)
+A caller who went quiet used to hear nothing until the 30 s idle timeout hung
+up on them. Now, after `engine.turn_taking.reprompt_after_s` (10 s) of silence,
+the agent asks "Are you still there?", up to `max_reprompts` (2) times, then says
+goodbye and ends the call itself ([[decisions]] 052).
+
+* Pipecat's own `on_user_turn_idle` event does the timing; `engine/silence.py`
+  only counts, so the logic is tested without a pipeline. Caller speech resets
+  the count.
+* The call record's cause reads `caller silent -- no answer to N check-in(s)`
+  instead of the generic idle timeout.
+* `reprompt_after_s: 0` restores the old behaviour exactly. A value at or above
+  `idle_timeout_s` is refused at startup, because the check-in could never fire.
+* **Needs a live call** to confirm the event fires on real line silence and
+  that a check-in does not talk over a caller who is slow to start.
+
 ## 2026-09-28 — A supervised improvement loop
 `/improve` proposes features into [[backlog]], builds only the ones you approve,
 each on its own branch behind a backup tag, and never merges ([[decisions]] 051).
