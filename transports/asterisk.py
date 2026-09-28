@@ -26,20 +26,21 @@ dedicated OS threads per call do blocking recv()/sendall(), and they hand off to
 asyncio through queues. That machinery already exists in AudioSocketConnection
 and is UNCHANGED by this refactor -- we only put an async face on it:
 
-    read_audio()   ->  await self._io.incoming.get()
+    read_audio()   ->  await self._io.read()
                        `incoming` is an asyncio.Queue. The READ THREAD never
                        touches it directly; it calls loop.call_soon_threadsafe,
                        which is the only safe way to reach asyncio from a
                        thread. So awaiting it here is ordinary asyncio -- the
                        thread boundary was already crossed for us.
 
-    write_audio()  ->  run_in_executor(None, self._io.queue_output, pcm)
+    write_audio()  ->  await self._io.queue_output(pcm)
                        `_outgoing` is a thread-safe queue.Queue bounded to 3
-                       frames, so queue_output() BLOCKS when the write thread
-                       has not drained it yet. That block is not a bug -- it is
-                       what paces the agent's speech to real time. We run it in
-                       an executor thread so it paces us without freezing the
-                       event loop.
+                       frames, so queue_output() WAITS when the write thread
+                       has not drained it yet. That wait is not a bug -- it is
+                       what paces the agent's speech to real time. It waits on
+                       an asyncio.Event, not in a thread-pool worker, so it
+                       paces us without freezing the loop or exhausting a pool
+                       ([[decisions]] 046).
 
 Two rules that must survive any future edit:
   * The write thread sends CONTINUOUSLY, emitting silence when the agent is
@@ -121,7 +122,7 @@ class AsteriskCallSession(CallSession):
         _signal_end(), so a hangup wakes this await immediately instead of
         leaving the engine blocked forever.
         """
-        return await self._io.incoming.get()
+        return await self._io.read()
 
     async def write_audio(self, pcm: bytes) -> None:
         """Hand one frame to the write thread. Waits (async) to pace playback.
@@ -280,6 +281,14 @@ class AsteriskCallSession(CallSession):
         if self._io.frames_dropped or self._io.pacer_slips:
             base += (
                 f" DROPPED={self._io.frames_dropped} slips={self._io.pacer_slips}"
+            )
+        # Not overload signals, so lower case and apart: audio from before the
+        # engine was listening, and pacer stalls before the agent first spoke.
+        # Large values mean a slow start, not a busy box.
+        if self._io.frames_stale or self._io.startup_slips:
+            base += (
+                f" startup: stale={self._io.frames_stale}"
+                f" slips={self._io.startup_slips}"
             )
         return base
 

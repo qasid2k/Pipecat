@@ -126,6 +126,14 @@ class AudioSocketConnection:
         # should stop a load test. It used to be incremented and never read
         # anywhere -- invisible by accident, not by design.
         self.frames_dropped = 0
+        # Frames thrown away BEFORE the engine read its first one. Not overload:
+        # the pipeline does not exist yet, so it cannot be falling behind. It is
+        # caller audio from before the agent was listening, and it overflows the
+        # backlog whenever startup takes longer than MAX_QUEUED_FRAMES (2 s).
+        # Counted apart so a slow start cannot masquerade as a machine at its
+        # limit -- the startup cost itself shows up as time-to-greeting.
+        self.frames_stale = 0
+        self.listening = False
         self.frames_out = 0
         self.frames_out_real = 0
         # Set by the write thread every time it takes a frame off _outgoing, so
@@ -138,6 +146,12 @@ class AudioSocketConnection:
         # speech was not delivered at real time, which the caller hears as
         # choppiness. Also previously detected and silently discarded.
         self.pacer_slips = 0
+        # The same slip, before the agent has said anything on this call. The
+        # caller hears silence either way, so it is not delivered late. What
+        # causes it -- this call's own startup, measured at 1-3 slips even for a
+        # lone caller on a laptop -- is real, but its audible cost lands on
+        # OTHER calls already talking, and they count it in their pacer_slips.
+        self.startup_slips = 0
 
         try:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECV_BUFFER_BYTES)
@@ -260,10 +274,19 @@ class AudioSocketConnection:
         if self.incoming.qsize() >= MAX_QUEUED_FRAMES:
             try:
                 self.incoming.get_nowait()
-                self.frames_dropped += 1
+                if self.listening:
+                    self.frames_dropped += 1
+                else:
+                    self.frames_stale += 1
             except asyncio.QueueEmpty:
                 pass
         self.incoming.put_nowait(payload)
+
+    async def read(self) -> bytes | None:
+        """Next caller frame for the engine. The first call marks the moment the
+        engine started listening; see `frames_stale`."""
+        self.listening = True
+        return await self.incoming.get()
 
     # -- WRITE thread (paced sendall; silence when the agent is quiet) -----
     def _write_loop(self):
@@ -323,7 +346,10 @@ class AudioSocketConnection:
                     # More than 100 ms behind: this call's audio has already been
                     # delivered late. Count it -- resyncing silently is how a
                     # machine at its limit goes on looking healthy.
-                    self.pacer_slips += 1
+                    if self.frames_out_real:
+                        self.pacer_slips += 1
+                    else:
+                        self.startup_slips += 1
                     next_send = time.monotonic()  # fell behind -- resync
         except Exception as e:  # noqa: BLE001
             self._signal_end(f"write loop crashed: {e!r}")

@@ -12,9 +12,11 @@ no identifier with the call that produced them).
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 from loguru import logger
 
@@ -22,6 +24,7 @@ from ari_controller import AriCall
 from core.logging import NO_CALL, configure_logging
 from engine.transcripts import TranscriptRecorder, save_conversation
 from transports.asterisk import AsteriskCallSession
+from transports.audiosocket import MAX_QUEUED_FRAMES, AudioSocketConnection
 
 
 class FakeIO:
@@ -32,7 +35,9 @@ class FakeIO:
         self.frames_out = 20
         self.frames_out_real = 5
         self.frames_dropped = 0
+        self.frames_stale = 0
         self.pacer_slips = 0
+        self.startup_slips = 0
 
     def stop(self):
         pass
@@ -83,6 +88,77 @@ class OverloadCountersTest(unittest.TestCase):
 
     def test_pacer_slips_are_reported(self):
         self.assertIn("slips=3", self.make(slips=3).stats())
+
+    def test_stale_audio_is_reported_but_not_as_overload(self):
+        session = self.make()
+        session.io.frames_stale = 75
+        session.io.startup_slips = 2
+        stats = session.stats()
+        self.assertIn("startup: stale=75 slips=2", stats)
+        self.assertNotIn("DROPPED", stats)
+
+
+class StaleVersusDroppedTest(unittest.IsolatedAsyncioTestCase):
+    """A slow start must not look like a machine at its limit.
+
+    Found by the first real-engine load test: two callers, each with exactly 75
+    'dropped' frames, all in the first five seconds and none after. The engine
+    took ~3.5 s to start reading; the backlog holds 2 s. Counted as overload,
+    that failed a level that was, in every other respect, clean.
+    """
+
+    def connection(self):
+        return AudioSocketConnection(mock.MagicMock(), asyncio.get_running_loop())
+
+    async def test_overflow_before_the_engine_listens_is_stale(self):
+        io = self.connection()
+        for _ in range(MAX_QUEUED_FRAMES + 75):
+            io._push_incoming(b"\x01" * 320)
+        self.assertEqual(io.frames_stale, 75)
+        self.assertEqual(io.frames_dropped, 0)
+
+    async def test_overflow_after_the_engine_listens_is_overload(self):
+        io = self.connection()
+        io._push_incoming(b"\x01" * 320)
+        await io.read()  # the engine has started listening
+        for _ in range(MAX_QUEUED_FRAMES + 5):
+            io._push_incoming(b"\x01" * 320)
+        self.assertEqual(io.frames_dropped, 5)
+        self.assertEqual(io.frames_stale, 0)
+
+
+class StartupSlipTest(unittest.TestCase):
+    """The outbound twin: a stall before the agent has spoken is inaudible to
+    this caller. Same load test, same lesson -- 1-3 slips per call, every one
+    of them while the call was still sending pre-greeting silence."""
+
+    def stalled_write_loop(self, agent_frame: bool) -> AudioSocketConnection:
+        """Run the real write loop for two frames, the first send stalling
+        150 ms -- a pacer slip -- with or without agent audio in the queue."""
+        sock = mock.MagicMock()
+        io = AudioSocketConnection(sock, mock.MagicMock())
+        sends = []
+
+        def sendall(data):
+            sends.append(data)
+            if len(sends) == 1:
+                time.sleep(0.15)
+            else:
+                io._running = False
+
+        sock.sendall.side_effect = sendall
+        if agent_frame:
+            io._outgoing.put_nowait(b"\x01" * 320)
+        io._write_loop()
+        return io
+
+    def test_a_slip_before_the_agent_speaks_is_startup(self):
+        io = self.stalled_write_loop(agent_frame=False)
+        self.assertEqual((io.startup_slips, io.pacer_slips), (1, 0))
+
+    def test_a_slip_once_the_agent_has_spoken_is_overload(self):
+        io = self.stalled_write_loop(agent_frame=True)
+        self.assertEqual((io.startup_slips, io.pacer_slips), (0, 1))
 
 
 class TranscriptTest(unittest.IsolatedAsyncioTestCase):

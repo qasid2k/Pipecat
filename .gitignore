@@ -24,6 +24,7 @@
 # people make before editing.
 config.local.yaml
 config.loadtest.yaml
+config.speech.yaml
 config.*.local.yaml
 *.yaml.bak
 *.yml.bak
