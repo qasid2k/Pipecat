@@ -136,6 +136,19 @@ class CallSession(ABC):
         """
         return {}
 
+    def setup_marks(self) -> dict[str, float]:
+        """`time.monotonic()` readings for the moments only the transport sees.
+
+        Keys, when present: `connected` (the vendor's audio connection
+        arrived), `correlated` (it was matched to its call), `first_speech`
+        (the first frame of AGENT audio went out). The engine adds its own steps
+        in between and logs the breakdown -- see engine/timing.py.
+
+        Empty by default: an adapter that stamps nothing just gets a shorter
+        `setup:` line.
+        """
+        return {}
+
     async def disconnect(self) -> None:
         """End the call **for the caller too**, not just on our side.
 

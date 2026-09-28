@@ -11,3 +11,4 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-28 11:30 | BUILD | IMP-001 | tests 131→147 | silence check-in built on branch, ready for live review |
 | 2026-09-28 15:55 | BUILD | IMP-002 | tests 131→143 | greeting-delay breakdown built; smoke spike clean; ready for review |
 | 2026-09-28 17:00 | VERIFIED | IMP-001 | tests 147 | live on VM: check-ins + goodbye work; tagged release/2026-09-28-IMP-001 |
+| 2026-09-28 17:30 | BUILD | IMP-002 | tests 147→159 | moved onto working branch, conflicts merged; LIVE-TEST |

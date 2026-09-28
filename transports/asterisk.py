@@ -56,6 +56,7 @@ import asyncio
 import socket
 import sys
 import threading
+import time
 from typing import AsyncIterator
 
 from loguru import logger
@@ -91,6 +92,8 @@ class AsteriskCallSession(CallSession):
         transfer_context: str = "transfer",
     ):
         self._io = io
+        # Correlation is done by the time this object exists -- see _intake().
+        self._created_at = time.monotonic()
         self._addr = addr
         self._controller = controller
         self._ari_call = ari_call
@@ -249,6 +252,12 @@ class AsteriskCallSession(CallSession):
             "frames_dropped": self._io.frames_dropped,
             "pacer_slips": self._io.pacer_slips,
         }
+
+    def setup_marks(self) -> dict[str, float]:
+        marks = {"connected": self._io.connected_at, "correlated": self._created_at}
+        if self._io.first_real_out_at is not None:
+            marks["first_speech"] = self._io.first_real_out_at
+        return marks
 
     @property
     def can_transfer(self) -> bool:

@@ -145,7 +145,7 @@ Review notes:
   The base before this item is tagged backup/2026-09-28-pre-IMP-001.
 
 ### IMP-002 — Break down the 3–6 s wait before the greeting
-status: READY-FOR-REVIEW
+status: LIVE-TEST
 source: roadmap §2 Stage E (open measurement items); Stage E load-test notes
   (greeting takes 3–6 s, and the engine only starts reading ~3.6 s after connect,
   cause unexplained)
@@ -175,7 +175,7 @@ live check needed (on the VM): make 3 calls and read the `setup:` lines. That te
   this shows.
 risk / blast radius: logging and metrics only; one timestamp in the write
   thread (one assignment, not per-frame work after the first).
-branch: improve/IMP-002-greeting-timing (commit 47b0ddf)
+commit: on feature/multi-agent-pool (the commit titled `IMP-002: …`), brought over from the old improve/IMP-002-greeting-timing branch
 why rejected: —
 Review notes:
   WHAT CHANGED, file by file
@@ -210,7 +210,8 @@ Review notes:
     calls.db, that is a separate item: "add schema migrations".
   - A caller who hangs up before the greeting is left out of the average. It
     wasn't a 0-second wait.
-  HOW TO TEST ON THE VM (git pull this branch, restart bot.py)
+  HOW TO TEST ON THE VM (`git pull`, then restart bot.py: Ctrl+C once, wait for
+  `stopped cleanly`, start it again)
   1. Make 3 calls to 6001, each long enough to hear the greeting.
   2. grep "setup:" in the console or logs/agent.jsonl. Each call shows a line like
      `setup: connected→correlated 40 ms | correlated→engine_start 5 ms |
@@ -222,11 +223,11 @@ Review notes:
   Already verified here: 143 tests pass, and a silent-engine spike of 5
   callers was clean (0 dropped frames, 0 pacer slips). Only a real call can
   produce the actual numbers.
-  MERGING WITH IMP-001: both branches edit PipecatEngine.run(), the top of
-  changelog.md, and the same row area of runbook.md. Expect small merge
-  conflicts. Keep both sides in each case.
-  ROLL BACK: don't merge, or `git branch -D improve/IMP-002-greeting-timing`.
-  The base before this item is tagged backup/2026-09-28-pre-IMP-002.
+  COMBINED WITH IMP-001: brought onto the working branch after IMP-001. The
+  overlaps (engine run(), changelog, runbook) were merged keeping both. 159
+  tests pass (147 + 12), and a silent-engine spike of 5 was clean again.
+  ROLL BACK: `git revert <the IMP-002 commit>` (then push), or go back to
+  tag backup/2026-09-28-pre-IMP-002-linear.
 
 ### IMP-003 — Back up the Asterisk configuration into the repo
 status: APPROVED

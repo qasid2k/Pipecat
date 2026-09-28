@@ -52,6 +52,10 @@ class EngineResult:
     transcript_path: str = ""
     conversation_path: str = ""
     turns: int = 0
+    # Seconds from the audio connection arriving to the first word of the
+    # greeting going out, or None if the agent never spoke. The rest of the
+    # breakdown is only logged; this total is what /metrics averages.
+    time_to_greeting_s: float | None = None
 
 
 class Engine(ABC):

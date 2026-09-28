@@ -122,6 +122,10 @@ class Counters:
     # numbers a capacity ceiling is measured against -- see [[decisions]] 038.
     frames_dropped_total: int = 0
     pacer_slips_total: int = 0
+    # Dead air before the greeting, as a sum + count so any scraper can
+    # average it over any window. Calls the agent never spoke on are left out.
+    greetings_total: int = 0
+    greeting_seconds_total: float = 0.0
 
     @property
     def uptime_s(self) -> float:
@@ -136,4 +140,6 @@ class Counters:
             "transfers_total": self.transfers_total,
             "frames_dropped_total": self.frames_dropped_total,
             "pacer_slips_total": self.pacer_slips_total,
+            "greetings_total": self.greetings_total,
+            "greeting_seconds_total": round(self.greeting_seconds_total, 3),
         }

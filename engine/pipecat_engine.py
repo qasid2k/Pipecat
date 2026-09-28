@@ -25,6 +25,7 @@ Verified against pipecat-ai 1.6.0.
 
 import asyncio
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +59,7 @@ from core.records import RecordWriter
 from core.transport import CallSession
 from engine.session_transport import CallSessionTransport
 from engine.silence import SilenceAction, SilencePolicy
+from engine.timing import format_setup, setup_breakdown
 from engine.transcripts import TranscriptRecorder, save_conversation
 
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
@@ -321,6 +323,9 @@ class PipecatEngine(Engine):
         path -- including the exception path below.
         """
         started = datetime.now()
+        # Monotonic marks for the `setup:` line; the transport supplies the
+        # outer ones (connected, correlated, first_speech). See engine/timing.py.
+        marks: dict[str, float | None] = {"engine_start": time.monotonic()}
 
         # The filename is keyed by CALL ID, not by a fresh random tag.
         #
@@ -362,7 +367,9 @@ class PipecatEngine(Engine):
         # the one construction step expensive enough to matter when several
         # calls arrive at the same moment.
         vad = await self._build_vad()
+        marks["vad_built"] = time.monotonic()
         pipeline, context, user_aggregator = self._build_pipeline(transport, recorder, vad)
+        marks["pipeline_built"] = time.monotonic()
         # Held in a variable rather than constructed inline: the transfer tool
         # writes the chosen department onto it, and the `finally` below reads it
         # back to fill in the call record.
@@ -376,6 +383,13 @@ class PipecatEngine(Engine):
             app_resources=resources,
         )
         runner = WorkerRunner(handle_sigint=False)
+
+        # Fires once every processor has handled StartFrame -- i.e. after the
+        # Deepgram and Gemini connections are open. Splits "connecting to the
+        # providers" from "synthesising and sending the greeting".
+        @task.event_handler("on_pipeline_started")
+        async def on_pipeline_started(_task, _frame):
+            marks["pipeline_started"] = time.monotonic()
 
         # Records WHO ended the call, so a premature drop is self-diagnosing.
         cause = {"reason": "the pipeline finished on its own (nothing left to do)"}
@@ -438,6 +452,17 @@ class PipecatEngine(Engine):
             duration = (datetime.now() - started).total_seconds()
             # Frame counters are vendor-specific, so they are optional extra detail.
             stats = session.stats() if hasattr(session, "stats") else ""
+            outer = session.setup_marks()
+            steps, time_to_greeting = setup_breakdown([
+                ("connected", outer.get("connected")),
+                ("correlated", outer.get("correlated")),
+                ("engine_start", marks["engine_start"]),
+                ("vad_built", marks.get("vad_built")),
+                ("pipeline_built", marks.get("pipeline_built")),
+                ("pipeline_started", marks.get("pipeline_started")),
+                ("first_speech", outer.get("first_speech")),
+            ])
+            logger.info(format_setup(steps, time_to_greeting))
             logger.warning(
                 f"--- Call ended after {duration:.1f}s; {stats} ---\n"
                 f"    CAUSE: {cause['reason']}"
@@ -452,4 +477,5 @@ class PipecatEngine(Engine):
             transcript_path=str(transcript_path),
             conversation_path=str(conversation_path),
             turns=recorder.turns,
+            time_to_greeting_s=time_to_greeting,
         )

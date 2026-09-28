@@ -6,6 +6,25 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-28 — Where the silence before the greeting goes (IMP-002)
+Callers hear 3–6 s of nothing before the agent speaks, and nobody knew which
+step costs it. Every call now logs one `setup:` line splitting that wait into
+steps, and `/metrics` carries `voiceagent_time_to_greeting_seconds` (a
+Prometheus summary: `_sum` + `_count`, so any window can be averaged).
+
+* The transport stamps what only it sees: the socket connecting, the call being
+  matched to its ARI channel, and the **first frame of agent audio** — not the
+  silence keep-alive, which starts at once. The engine stamps its own steps in
+  between, including Pipecat's `on_pipeline_started`, which separates "opening
+  the Deepgram and Gemini connections" from "synthesising the greeting".
+* New optional `CallSession.setup_marks()`, empty by default, so another vendor
+  adapter just gets a shorter line.
+* A call the agent never spoke on is left out of the average rather than
+  counted as a 0 s greeting.
+* **No database change**: `stores/sqlite_store.py` has no migrations, so a new
+  column would silently never appear in an existing `calls.db`.
+* Measured nothing yet — the real numbers only exist on a real call.
+
 ## 2026-09-28 — Improvement loop: one branch, one feature at a time, product-sized ideas
 `/improve` now commits each approved item to the working branch and pushes it,
 then waits for your live test on the VM before building the next one. No more

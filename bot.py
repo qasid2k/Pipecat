@@ -227,6 +227,9 @@ async def _serve(
             # Summed from the finished call, so the totals and the row agree.
             counters.frames_dropped_total += record.frames_dropped
             counters.pacer_slips_total += record.pacer_slips
+            if result is not None and result.time_to_greeting_s is not None:
+                counters.greetings_total += 1
+                counters.greeting_seconds_total += result.time_to_greeting_s
             if record.transferred_to:
                 counters.transfers_total += 1
 

@@ -367,6 +367,10 @@ class ApiServer:
             "# HELP voiceagent_pacer_slips_total Times outbound audio ran late.",
             "# TYPE voiceagent_pacer_slips_total counter",
             f"voiceagent_pacer_slips_total {c.pacer_slips_total}",
+            "# HELP voiceagent_time_to_greeting_seconds Connect to first agent audio.",
+            "# TYPE voiceagent_time_to_greeting_seconds summary",
+            f"voiceagent_time_to_greeting_seconds_sum {c.greeting_seconds_total:.3f}",
+            f"voiceagent_time_to_greeting_seconds_count {c.greetings_total}",
         ]
         # What a call COSTS, in the standard Prometheus process-metric names so
         # any scraper recognises them. CPU is a counter: sample it twice and the

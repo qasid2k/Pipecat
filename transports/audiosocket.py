@@ -134,6 +134,12 @@ class AudioSocketConnection:
         # limit -- the startup cost itself shows up as time-to-greeting.
         self.frames_stale = 0
         self.listening = False
+        # Monotonic stamps for the `setup:` line (engine/timing.py): when the
+        # socket arrived, and when the first frame of AGENT audio -- not the
+        # silence keep-alive, which starts at once -- actually left. The gap is
+        # what the caller hears as dead air before the greeting.
+        self.connected_at = time.monotonic()
+        self.first_real_out_at: float | None = None
         self.frames_out = 0
         self.frames_out_real = 0
         # Set by the write thread every time it takes a frame off _outgoing, so
@@ -317,6 +323,8 @@ class AudioSocketConnection:
                 heartbeat_frames += 1
                 if is_real:
                     self.frames_out_real += 1
+                    if self.first_real_out_at is None:
+                        self.first_real_out_at = time.monotonic()
 
                 now = time.monotonic()
                 if now - last_heartbeat >= 5.0:
