@@ -30,7 +30,9 @@ Related: [[roadmap]], [[improvement-log]], [[runbook]] §8.
 next `/improve` builds it · `IN-PROGRESS` being built · `LIVE-TEST` committed and
 pushed, **waiting for your VM check** (nothing new is built meanwhile) · `DONE`
 you confirmed it works live · `REJECTED` you said no · `BLOCKED` the loop could
-not finish it, and the reason is on the item. (`READY-FOR-REVIEW` is from the
+not finish it, and the reason is on the item. · `PARKED` set aside on
+purpose by you: it doesn't block the loop and isn't built until you set it back to
+`APPROVED` (or `LIVE-TEST`). (`READY-FOR-REVIEW` is from the
 old branch-per-item flow; IMP-002 is the last item to use it.)
 
 ### Item template
@@ -145,7 +147,7 @@ Review notes:
   The base before this item is tagged backup/2026-09-28-pre-IMP-001.
 
 ### IMP-002 — Break down the 3–6 s wait before the greeting
-status: LIVE-TEST
+status: PARKED (2026-09-28, by request; code is in and pushed, live check still to do: tools/check_greeting_timing.py)
 source: roadmap §2 Stage E (open measurement items); Stage E load-test notes
   (greeting takes 3–6 s, and the engine only starts reading ~3.6 s after connect,
   cause unexplained)
@@ -235,7 +237,7 @@ Review notes:
   tag backup/2026-09-28-pre-IMP-002-linear.
 
 ### IMP-003 — Back up the Asterisk configuration into the repo
-status: APPROVED
+status: PARKED (2026-09-28, by request; not built)
 source: roadmap §4 #7 and §5 #1 (`asterisk-config.md`)
 size: M
 why (value for the call centre): the dialplan (`[transfer]` departments, the
@@ -263,5 +265,133 @@ risk / blast radius: none to the running service (a read-only copy). The real
   risk is a secret getting into git, so the redaction tests are the core of the
   item, and you check the diff before committing.
 branch: —
+why rejected: —
+Review notes: —
+
+### IMP-004 — Supervisor web app (EPIC)
+status: APPROVED
+kind: EPIC
+for: supervisor (and later admin)
+source: product theme 1
+size: L (built as the slices below, each at most ~400 lines)
+why (what they can do afterwards that they can't today): today a supervisor
+  gets one read-only status page, reachable only over an SSH tunnel, that
+  forgets every call the moment it ends. They cannot look up yesterday's
+  calls, see why a call ended, read what a caller said, or log in from their
+  own PC. Every call is already recorded in `records/calls.db`; there is just
+  no way to see it.
+acceptance criteria (for the epic as a whole): a supervisor opens a URL on the
+  office network, logs in, sees live calls and agents (today's page), browses
+  and filters past calls, opens one to read its transcript and outcome, and
+  signs out, with no terminal and no SSH.
+slices (in order; each works on its own and gets its own live check):
+  1. **Call history, read-only** (IMP-005). A "Recent calls" list on the
+     existing page: time, caller, agent, duration, how it ended, transferred to.
+     Needs the store's first READ path (below). Loopback only, like today.
+  2. **Call detail + search.** Click a call: its transcript from the `turns`
+     table, cause, timings (IMP-002's `setup:` total, if stored), a filter by
+     date / agent / outcome / caller number. Known gap to confirm first:
+     agent-side turns may not be in `turns` yet (roadmap §2, deferred from
+     Stage B); if not, this slice shows the caller side plus a link to
+     `conversation.json`.
+  3. **Login.** One supervisor password (hash in `.env`, never in YAML), a
+     session cookie, every page and API route behind it, plus a logout. This is
+     what makes slice 4 safe; [[decisions]] 043 is exactly this gap.
+  4. **Reachable from the office network.** Bind to a LAN address only when
+     login is on (refuse to start otherwise), plus a runbook section on putting
+     HTTPS in front (Caddy/nginx), because a password over plain HTTP can be
+     sniffed.
+  5. **Agent view.** Per-agent calls today, average duration, transfer rate.
+     Bridges into theme 3 (admin), which edits agents from here.
+  Decision needed BEFORE slice 3 (a separate item when we get there): stay
+  with plain HTML + vanilla JS served by aiohttp (today's approach: no build
+  step, no CDN, decisions 045), or adopt a frontend framework. Recommendation:
+  stay plain until the page genuinely hurts to maintain.
+test plan (offline): per slice.
+live check needed (on the VM): per slice.
+risk / blast radius: the API runs INSIDE the call process, so every new read
+  must stay off the event loop (decisions 043). A slow query that blocks the
+  loop drops live calls. Each slice carries that as a test.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-005 — Recent-calls list in the supervisor page (slice 1 of IMP-004)
+status: APPROVED
+kind: SLICE (epic: IMP-004)
+for: supervisor
+source: product theme 1
+size: M
+why (what they can do afterwards that they can't today): see the last calls
+  that have ENDED (not just the ones in progress), with who called, which
+  agent answered, how long it lasted, how it ended, and whether it went to a
+  department, without opening SQLite by hand.
+acceptance criteria:
+  - `CallStore` gains its first read method, `recent_calls(limit, tenant_id)`.
+    It is implemented for SQLite on its OWN read-only connection (WAL allows
+    concurrent reads with the writer), run via `asyncio.to_thread`, so it
+    never blocks the event loop and never contends with the single writer
+    task. `NullCallStore` returns [].
+  - new route `GET /history?limit=50` (capped at 200) returns those rows as
+    JSON: call_id, started_at, duration_s, caller_id, persona, end_reason /
+    cause, transferred_to.
+  - the dashboard gets a "Recent calls" table under "Calls in progress",
+    loaded on page open and refreshed when a live call ends (the WebSocket
+    already pushes that change), not polled.
+  - still loopback-only with no auth. It exposes caller numbers exactly like
+    `/calls` already does, so no new exposure; login is slice 3.
+test plan (offline): store test against a temp SQLite file (write 3 calls
+  through the real writer, read them back newest-first, limit and tenant
+  honoured); a test that the read runs in a thread (the loop stays responsive
+  while a deliberately slow read runs); an API test for `/history` (shape, the
+  limit cap, an empty store); `/metrics` still carries no caller numbers.
+live check needed (on the VM): make 2 calls, open the dashboard (VS Code port
+  forward 8091): both appear under "Recent calls" within a second of hanging
+  up, newest first, with the right agent and "transferred to" for a transfer.
+  Then hang up during a third call's greeting: it appears too.
+risk / blast radius: touches `api/`, `core/records.py`, `stores/`, and the
+  dashboard HTML. Silent-engine smoke run required. No schema change.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-006 — `doctor`: one command that says what's wrong with a setup
+status: PROPOSED
+kind: SLICE (theme 2, "easy setup"; its epic gets written when a second setup slice exists, alongside IMP-003)
+for: developer / installer
+source: product theme 2
+size: M
+why (what they can do afterwards that they can't today): today a wrong setup
+  shows up as a confusing failure on the first call (B-008 Gemini 404, B-011,
+  B-013 port in use, missing ARI creds), and the fix is somewhere in an
+  800-line runbook. `python tools/doctor.py` checks everything BEFORE a call
+  and prints one plain line per problem, with the fix.
+acceptance criteria: checks, each printed as PASS / WARN / FAIL with a
+  one-line fix:
+  - Python is 3.12, the venv is active, installed pipecat-ai matches the pin
+    in requirements.txt (decisions 012)
+  - config.yaml (or the given file) loads, with core/config.py's own error
+    text shown
+  - every `*_env` variable config.yaml names is SET (names only; values are
+    never printed or logged)
+  - ports 8090/8091 are free or held by bot.py (B-013 wording)
+  - ARI answers at the configured URL with the configured user, and the
+    Stasis app name matches
+  - if `asterisk` is on PATH: extension 6001 exists, a `[transfer]` context
+    has all four departments, and the busy file named in the runbook exists
+    (the §4 traps)
+  - `--providers` (opt-in, because it makes network calls): Deepgram and
+    Gemini keys are accepted, using a free models/listing call, never a TTS or
+    LLM call
+  Exit code 0 when there are no FAILs.
+test plan (offline): each check is a function returning (level, message),
+  tested with fakes (a config fixture, a fake ARI HTTP server on localhost,
+  monkeypatched shutil.which / subprocess). A test that no check can print an
+  env var's value.
+live check needed (on the VM): run it on the working VM: all PASS. Then break
+  one thing at a time (stop Asterisk, rename an env var, start a second
+  bot.py): each gives the right FAIL and fix line.
+risk / blast radius: a new tool only; nothing in the call path changes.
+commit: —
 why rejected: —
 Review notes: —

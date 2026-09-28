@@ -77,6 +77,8 @@ The test count is the `Ran N tests` line.
    human's VM check. **Build nothing.** You may still run MODE A if fewer than 3
    items are `PROPOSED`. Otherwise report "waiting for the live test of IMP-…"
    and stop.
+   Items in `PARKED` were set aside by the human: they never gate the loop and
+   are never built, even if their code is already committed.
 5. **An item still in `IN-PROGRESS`** means a previous iteration died
    mid-build. Look at `git log`: if its commit exists, go to B5; if not,
    discard its uncommitted changes to tracked files (only the files that item
@@ -113,6 +115,9 @@ a code tidier.
 4. Append one line to `improvement-log.md`. Stop.
 
 ## MODE B: BUILD (the lowest-numbered `APPROVED` item, and nothing in `LIVE-TEST`)
+
+An approved `EPIC` is never built itself. Build its lowest-numbered approved
+`SLICE`.
 
 1. **Backup tag:** `git tag backup/<YYYY-MM-DD>-pre-IMP-###` on the current
    commit. Set the item to `IN-PROGRESS` in `backlog.md`.
