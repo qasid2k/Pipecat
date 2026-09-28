@@ -172,6 +172,39 @@ class SqliteCallStore(CallStore):
         )
         self._conn.commit()
 
+    # -- reading: the supervisor page's call history --------------------------
+    # Columns the page shows. Deliberately not SELECT *: file paths and frame
+    # counters are for investigation, not for a list a browser renders.
+    _RECENT_COLUMNS = (
+        "call_id", "started_at", "ended_at", "duration_s", "caller_id",
+        "persona", "end_reason", "cause", "transferred_to",
+    )
+
+    async def recent_calls(self, limit: int, tenant_id: str) -> list[dict]:
+        return await asyncio.to_thread(self._read_recent, limit, tenant_id)
+
+    def _read_recent(self, limit: int, tenant_id: str) -> list[dict]:
+        """Its OWN short-lived, read-only connection, never the writer's.
+
+        The writer's connection belongs to the RecordWriter task; sharing it
+        across threads would need a lock the write path must then wait on. WAL
+        mode lets this reader run alongside the writer without either blocking
+        the other, and `mode=ro` means a bug here cannot modify a record.
+        """
+        if not self._path.exists():
+            return []  # nothing recorded yet -- and don't create an empty file
+        conn = sqlite3.connect(f"file:{self._path.as_posix()}?mode=ro", uri=True)
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT {', '.join(self._RECENT_COLUMNS)} FROM calls "
+                "WHERE tenant_id = ? ORDER BY started_at DESC LIMIT ?",
+                (tenant_id, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
+
     async def close(self) -> None:
         await asyncio.to_thread(self._close)
 

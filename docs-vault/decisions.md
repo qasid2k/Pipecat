@@ -1506,3 +1506,40 @@ working and live-testable on its own. New infrastructure (a frontend framework,
 Docker, a database server) must be its own decision item, never slipped into a
 feature, because this project has repeatedly and deliberately chosen the
 simpler option (039, 043, 045).
+
+---
+
+## 054 — The first read of the call database, from inside the call process
+*Date: 2026-09-28 · IMP-005, slice 1 of the IMP-004 supervisor web app*
+
+**Decision.** `GET /history` reads recently finished calls from
+`records/calls.db`. `CallStore.recent_calls()` is its only read method. The
+SQLite implementation opens its **own short-lived, read-only connection**
+(`mode=ro`) per request, **in a thread** (`asyncio.to_thread`), selecting only
+the columns the page shows. The dashboard fetches it on page open and ~1.5 s
+after a live call ends, never on a timer.
+
+**Why this is allowed when [[decisions]] 043 said "no database queries in a
+handler".** 043's real rule is "never block the event loop", because a stalled
+loop drops live calls. A query awaited from a thread does not block it, and a
+test holds that line: a read made artificially slow (0.3 s) must leave the loop
+ticking. What 043 protected is kept; the letter of it is superseded for this
+one read path.
+
+**Why its own connection, not the writer's.** The writer's connection belongs
+to the single RecordWriter task. Sharing it across threads would need a lock
+that the write path then waits on, so a supervisor refreshing the page could
+delay a call's record. WAL mode lets a separate reader run alongside the writer
+without either blocking the other. `mode=ro` means a bug in the read path
+cannot change a record.
+
+**Why not abstract.** `recent_calls` has a default (`[]`) on `CallStore`, so a
+store written before reads existed keeps working and simply shows no history.
+
+**Why the 1.5 s wait on the page.** `run_call` removes the call from the live
+list first and submits its record last, through the writer's queue. Fetching
+the instant a call disappears would miss the call that triggered the fetch.
+
+**Limits.** `?limit=` is capped at 200 per request. Exposure is unchanged:
+loopback only and no auth, exactly like `/calls`, which already shows caller
+numbers. Login is slice 3 of IMP-004.

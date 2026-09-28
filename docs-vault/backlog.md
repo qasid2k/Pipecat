@@ -285,7 +285,7 @@ acceptance criteria (for the epic as a whole): a supervisor opens a URL on the
   and filters past calls, opens one to read its transcript and outcome, and
   signs out, with no terminal and no SSH.
 slices (in order; each works on its own and gets its own live check):
-  1. **Call history, read-only** (IMP-005). A "Recent calls" list on the
+  1. **Call history, read-only** (IMP-005, built; LIVE-TEST). A "Recent calls" list on the
      existing page: time, caller, agent, duration, how it ended, transferred to.
      Needs the store's first READ path (below). Loopback only, like today.
   2. **Call detail + search.** Click a call: its transcript from the `turns`
@@ -317,7 +317,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-005 — Recent-calls list in the supervisor page (slice 1 of IMP-004)
-status: APPROVED
+status: LIVE-TEST
 kind: SLICE (epic: IMP-004)
 for: supervisor
 source: product theme 1
@@ -351,9 +351,58 @@ live check needed (on the VM): make 2 calls, open the dashboard (VS Code port
   Then hang up during a third call's greeting: it appears too.
 risk / blast radius: touches `api/`, `core/records.py`, `stores/`, and the
   dashboard HTML. Silent-engine smoke run required. No schema change.
-commit: —
+commit: on feature/multi-agent-pool (the commit titled `IMP-005: …`)
 why rejected: —
-Review notes: —
+Review notes:
+  WHAT CHANGED, file by file
+  - core/records.py: the call store gets its first READ method,
+    `recent_calls(limit, tenant_id)`. The base class returns [] by default, so
+    any store that can't read yet just shows no history instead of crashing.
+    RecordWriter gets a matching pass-through, because the API only holds the
+    writer.
+  - stores/sqlite_store.py: the real query. It opens its OWN read-only
+    connection each time and runs in a background thread, never on the event
+    loop that serves calls. It returns only the columns the page needs
+    (no file paths). A missing database file means "no calls yet", not an
+    error.
+  - api/server.py: new route `GET /history?limit=50` (max 200). A bad limit
+    gives 400, a database error gives 503 (logged as `/history: …`), and
+    records disabled gives an empty list. Also listed in `/api`.
+  - api/dashboard.html: a "Recent calls" table under "Calls in progress". It
+    loads when the page opens, and when a live call disappears it waits
+    ~1.5 s (the record is written a moment after the call ends) and reloads.
+    No polling.
+  - tests/test_history.py: 14 tests, including one proving the event loop
+    keeps running while a deliberately slow (0.3 s) read is in progress.
+  - docs: decisions 054, changelog, and the runbook's dashboard section.
+  WHY THIS WAY
+  - The API lives inside the process that answers calls. Anything that blocks
+    it drops calls (B-001, B-011). So the read goes to a thread, on a separate
+    connection, so it never waits on, or delays, the writer.
+  - No schema change, no new dependency, still one HTML file (decisions 045).
+  - Same exposure as today: loopback only, no login (`/calls` already shows
+    caller numbers). Login is slice 3 of IMP-004.
+  ALREADY CHECKED HERE: 182 tests pass (168 + 14). A silent-engine spike of 5
+  was clean, and afterwards `/history` returned those 5 calls, the page had
+  the panel, and `?limit=x` gave 400.
+  HOW TO TEST ON THE VM
+  1. `git pull`, then `git log --oneline -1` should show the IMP-005 commit.
+     Restart bot.py (Ctrl+C once, wait for `stopped cleanly`, start it again).
+  2. Open the dashboard (VS Code PORTS → forward 8091, or
+     `ssh -L 8091:localhost:8091 root@<vm>`), then http://localhost:8091/.
+     "Recent calls" should already list older calls from calls.db, newest
+     first.
+  3. Keep the page open and call 6001. Talk briefly and hang up. Within ~2 s
+     the call appears at the top: the right agent, length, caller, and
+     "caller hung up".
+  4. Call again and ask for billing. After the transfer, "Transferred to"
+     shows `billing`.
+  5. Optional: `curl -s localhost:8091/history?limit=2` prints JSON with the
+     same two calls.
+  If the table stays empty, check `service.records.enabled` and that
+  `records/calls.db` exists on the VM.
+  UNDO: `git revert <the IMP-005 commit>` and push, or return to tag
+  backup/2026-09-28-pre-IMP-005.
 
 ### IMP-006 — `doctor`: one command that says what's wrong with a setup
 status: PROPOSED

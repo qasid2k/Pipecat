@@ -51,6 +51,12 @@ from core.pool import AgentPool
 from core.records import RecordWriter
 
 
+# /history page size. Capped so a hand-typed ?limit= cannot make one request
+# read the whole table into memory on the call process.
+HISTORY_DEFAULT = 50
+HISTORY_MAX = 200
+
+
 def _rss_bytes() -> int | None:
     """This process's resident memory, from procfs. None where there is none.
 
@@ -133,6 +139,7 @@ class ApiServer:
                 web.get("/health", self._health),
                 web.get("/pool", self._pool_state),
                 web.get("/calls", self._calls),
+                web.get("/history", self._history),
                 web.get("/metrics", self._metrics),
                 web.get("/live", self._live_socket),
             ]
@@ -272,7 +279,8 @@ class ApiServer:
                 "service": "voice-agent",
                 "tenant": self._tenant_id,
                 "endpoints": [
-                    "/", "/health", "/pool", "/calls", "/metrics", "/live (ws)"
+                    "/", "/health", "/pool", "/calls", "/history", "/metrics",
+                    "/live (ws)",
                 ],
             }
         )
@@ -324,6 +332,30 @@ class ApiServer:
         the event loop.
         """
         calls = self._live.snapshot()
+        return _json({"count": len(calls), "calls": calls})
+
+    async def _history(self, request: web.Request) -> web.Response:
+        """Recently FINISHED calls, newest first. **Contains caller phone numbers**,
+        exactly like /calls, and is loopback-only for the same reason (login is
+        slice 3 of [[backlog]] IMP-004).
+
+        The one handler that touches the database, so the rule every other
+        handler keeps by reading memory is kept here by the store: the query
+        runs in a thread on its own read-only connection, and the loop only
+        awaits it ([[decisions]] 043, 054).
+        """
+        try:
+            limit = int(request.query.get("limit", HISTORY_DEFAULT))
+        except ValueError:
+            return _json({"error": "limit must be a whole number"}, status=400)
+        limit = max(1, min(limit, HISTORY_MAX))
+        if self._records is None:
+            return _json({"count": 0, "calls": []})
+        try:
+            calls = await self._records.recent_calls(limit=limit, tenant_id=self._tenant_id)
+        except Exception as e:  # noqa: BLE001 -- a store fault must not become a 500 page
+            logger.warning(f"/history: could not read call records: {e!r}")
+            return _json({"error": "call history is unavailable right now"}, status=503)
         return _json({"count": len(calls), "calls": calls})
 
     async def _metrics(self, _request: web.Request) -> web.Response:

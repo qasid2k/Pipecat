@@ -11,6 +11,10 @@
   It renders whatever /live pushes. Durations tick on the BROWSER's clock,
   derived from each call's started_at, so the server sends nothing at all while
   the service is idle -- see ApiServer._signature.
+
+  "Recent calls" is the one thing it fetches instead: finished calls live in
+  the database, not in the live state, so they come from GET /history -- on
+  page open and when a call ends, never on a timer.
 -->
 <html lang="en">
 <head>
@@ -125,6 +129,17 @@
   <div class="empty" id="nocalls">No calls in progress</div>
 </div>
 
+<div class="panel" style="margin-top:16px">
+  <h2>Recent calls</h2>
+  <table>
+    <thead>
+      <tr><th>Started</th><th>Length</th><th>Agent</th><th>Caller</th><th>How it ended</th><th>Transferred to</th></tr>
+    </thead>
+    <tbody id="history"></tbody>
+  </table>
+  <div class="empty" id="nohistory">No finished calls yet</div>
+</div>
+
 <footer id="uptime"></footer>
 
 <script>
@@ -144,8 +159,15 @@ function connect() {
   ws.onopen = () => { $("conn").textContent = "live"; $("conn").className = "up"; };
 
   ws.onmessage = (event) => {
+    const before = new Set(((state && state.calls) || []).map((c) => c.call_id));
     state = JSON.parse(event.data);
     render();
+    // A call that was live and now is not has just ended, so its row is on
+    // its way to the database. The record is written a moment AFTER the call
+    // leaves the live list (bot.py: live.ended() runs first), so wait before
+    // asking -- asking at once would miss the very call that triggered it.
+    const now = new Set((state.calls || []).map((c) => c.call_id));
+    if ([...before].some((id) => !now.has(id))) setTimeout(loadHistory, 1500);
   };
 
   ws.onclose = () => {
@@ -230,9 +252,35 @@ function esc(s) {
   }[ch]));
 }
 
+// Finished calls, from the database. Fetched on open and when a call ends --
+// never on a timer, so an idle dashboard still costs the server nothing.
+async function loadHistory() {
+  let rows;
+  try {
+    const resp = await fetch("/history?limit=50");
+    if (!resp.ok) throw new Error(resp.status);
+    rows = (await resp.json()).calls;
+  } catch (e) {
+    $("nohistory").textContent = "Call history is unavailable right now";
+    $("nohistory").style.display = "block";
+    return;
+  }
+  $("nohistory").textContent = "No finished calls yet";
+  $("nohistory").style.display = rows.length ? "none" : "block";
+  $("history").innerHTML = rows.map((c) => `<tr>
+      <td class="mono">${esc(new Date(c.started_at).toLocaleString())}</td>
+      <td class="dur">${hhmmss(c.duration_s || 0)}</td>
+      <td>${esc(c.persona || "")}</td>
+      <td class="mono">${esc(c.caller_id || "")}</td>
+      <td>${esc(c.cause || c.end_reason || "")}</td>
+      <td>${esc(c.transferred_to || "—")}</td>
+    </tr>`).join("");
+}
+
 // Redraw once a second so durations advance without the server sending anything.
 setInterval(renderCalls, 1000);
 connect();
+loadHistory();
 </script>
 </body>
 </html>

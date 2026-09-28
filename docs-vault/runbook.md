@@ -566,6 +566,13 @@ from memory. Durations are counted by the browser, so **the server sends nothing
 at all while the service is idle** ([[decisions]] 045). "disconnected" in the
 corner means the socket dropped; it reconnects on its own.
 
+**Recent calls** (bottom panel) are the last 50 finished calls from
+`records/calls.db`, via `GET /history`. They load when the page opens and
+refresh about 1.5 s after a call ends. Empty with "No finished calls yet" means
+the database has no rows for this `tenant_id`. "Call history is unavailable"
+means the read failed; the bot log has a `/history:` warning with the reason.
+With `service.records.enabled: false` the panel is always empty.
+
 ### The control plane
 
 A read-only HTTP surface on `127.0.0.1:8091` (`service.api`). Everything it

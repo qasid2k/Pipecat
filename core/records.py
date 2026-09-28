@@ -125,6 +125,17 @@ class CallStore(ABC):
     async def close(self) -> None:
         """Flush and release. Idempotent."""
 
+    async def recent_calls(self, limit: int, tenant_id: str) -> list[dict]:
+        """The latest finished calls for one tenant, newest first, as plain dicts.
+
+        The store's only READ, for the supervisor page. Not abstract: a store
+        written before reads existed simply has no history to show, which is an
+        honest answer rather than a reason to refuse to start. Implementations
+        must not block the event loop -- the API that calls this runs inside the
+        call process ([[decisions]] 043).
+        """
+        return []
+
     @property
     def describe(self) -> str:
         """One line for the startup banner, e.g. 'sqlite -> records.db'."""
@@ -241,6 +252,13 @@ class RecordWriter:
                 # on the first bad row -- would silently stop recording for the
                 # life of the process, which is worse than losing one row.
                 self._log("warning", f"could not write record: {e}")
+
+    async def recent_calls(self, limit: int, tenant_id: str) -> list[dict]:
+        """Read through to the store. Unlike submit(), this CAN raise: a reader
+        asked a question and deserves to know it went unanswered, so the API
+        turns a failure into a 503 instead of an empty list that looks like a
+        quiet day."""
+        return await self._store.recent_calls(limit=limit, tenant_id=tenant_id)
 
     async def close(self, timeout: float = 5.0) -> None:
         """Drain what is queued, then release the store.

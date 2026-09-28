@@ -6,6 +6,19 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-28 — Supervisor page: recent calls (IMP-005, web app slice 1)
+The dashboard now lists the last 50 **finished** calls, not just the ones in
+progress: when, how long, which agent, the caller, how it ended, and whether it
+went to a department. It is the first slice of the supervisor web app
+(IMP-004 in [[backlog]]).
+
+* `GET /history?limit=N` (default 50, max 200), the first thing that reads
+  `records/calls.db` back ([[decisions]] 054). It runs in a thread on its own
+  read-only connection, so it cannot stall live calls.
+* The table loads when the page opens and refreshes itself about 1.5 s after a
+  call ends. It never polls.
+* Still loopback-only with no login, like `/calls`. Login is slice 3.
+
 ## 2026-09-28 — Where the silence before the greeting goes (IMP-002)
 Callers hear 3–6 s of nothing before the agent speaks, and nobody knew which
 step costs it. Every call now logs one `setup:` line splitting that wait into

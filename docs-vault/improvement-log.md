@@ -15,3 +15,4 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-28 17:50 | FIX | IMP-002 | tests 159→168 | added tools/check_greeting_timing.py live-check script |
 | 2026-09-28 18:10 | PROPOSE | IMP-004..006 | tests 168→168 | web-app epic + call-history slice, setup doctor; IMP-002 still LIVE-TEST |
 | 2026-09-28 18:20 | PARK | IMP-002, IMP-003 | tests 168 | parked by request; IMP-004 epic + IMP-005 approved |
+| 2026-09-28 18:45 | BUILD | IMP-005 | tests 168→182 | recent-calls list + /history built, smoke clean; LIVE-TEST |
