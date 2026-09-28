@@ -6,6 +6,14 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-28 — Improvement loop: one branch, one feature at a time, product-sized ideas
+`/improve` now commits each approved item to the working branch and pushes it,
+then waits for your live test on the VM before building the next one. No more
+`improve/*` branches ([[decisions]] 053). It also proposes against a new
+[[product]] note (users, themes, rules), so it suggests features such as a
+supervisor web app, easier setup and admin without YAML, split into epics of
+small, live-testable slices, instead of only small code tweaks.
+
 ## 2026-09-28 — A silent caller gets checked on, not cut off (IMP-001)
 A caller who went quiet used to hear nothing until the 30 s idle timeout hung
 up on them. Now, after `engine.turn_taking.reprompt_after_s` (10 s) of silence,

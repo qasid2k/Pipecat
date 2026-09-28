@@ -815,9 +815,9 @@ Every version you might want back has a name ([[decisions]] 051):
 
 | Tag / branch | Made by | Marks |
 |---|---|---|
-| `improve/IMP-###-…` | the loop | one improvement, not yet merged |
+| `improve/IMP-###-…` | the loop (old flow, before [[decisions]] 053) | one improvement on its own branch. No longer created |
 | `backup/<date>-pre-IMP-###` | the loop, before each build | the base exactly as it was before that item |
-| `release/<date>` | **you**, after each merge | a version you have live-checked. **This is what the VM rolls back to.** |
+| `release/<date>` / `release/<date>-IMP-###` | the loop, when you say an item works live (or you, by hand) | a version you have live-checked. **This is what the VM rolls back to.** |
 
 List them: `git tag -l "backup/*" "release/*"` and `git branch -l "improve/*"`.
 

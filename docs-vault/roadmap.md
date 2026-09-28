@@ -196,4 +196,6 @@ Identified as missing, in the order I would write them:
   whichever note owns it.
 * Reversing a decision → [[decisions]] is **append-only**. Supersede, never edit.
 * Improvement ideas, new or from this note → [[backlog]], worked by `/improve`
-  ([[decisions]] 051). An item from §3 still needs its trigger to have fired.
+  ([[decisions]] 051, 053). An item from §3 still needs its trigger to have fired.
+* Where the product is heading, and who it is for → [[product]]. The loop
+  proposes against it.

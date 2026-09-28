@@ -1461,3 +1461,48 @@ resets the timer.)
 
 **Not proven offline:** that the event fires on real line silence, and how a
 check-in lands on a caller who was about to speak.
+
+---
+
+## 053 — The improvement loop goes linear, and proposes at product scope
+*Date: 2026-09-28 · supersedes the branch-per-item parts of 051*
+
+**What changed.** 051 built each item on its own `improve/*` branch, never
+committed to the working branch, and never pushed. After the first two items
+that turned out to be the wrong shape for how this project is actually built:
+
+* **Nothing reached the VM by itself.** The VM tests what `git pull` brings, so
+  every item needed a manual push, and the first live test of IMP-001 silently
+  ran the OLD code because the merge had been made but not pushed.
+* **Branches drifted apart.** IMP-001 and IMP-002 both edited
+  `PipecatEngine.run()` and the top of the changelog, so every second item
+  started as a merge conflict.
+* **It wasn't how the human works.** This project has always been built one
+  feature at a time on one branch, finished and live-tested before the next.
+
+**Now:** one working branch (`base:` in [[backlog]]). The loop builds ONE
+approved item, commits it there, pushes that branch, and sets it to
+`LIVE-TEST`. **Nothing new is built until the human reports the live result.**
+"Works" leads to `DONE` and a `release/<date>-IMP-…` tag. "Failed" leads to a
+fix commit, or a `git revert` if the item is dropped.
+
+**What 051 got right and is kept:** the human approves every item and decides
+when something is done; tests come first; the test count only rises; there are
+no paid or live runs; there is a backup tag before every build; and decisions
+stay append-only. The human gate moved from "before merge" to "before the next
+feature", which is where live testing actually happens.
+
+**Why pushing is now allowed:** only the working branch, only after the gates
+pass, never with force, never `main`. A push is what lets the VM test the
+item; without it the loop's output can't be verified at all. History is never
+rewritten, so a bad item is undone by a visible `git revert`.
+
+**Product scope.** Proposals were small, code-level tweaks. The product is meant
+to become a full call-centre product, so the loop now reads [[product]] (users,
+themes, rules) and every proposal round must include at least one item from its
+top three themes: supervisor web app, easy developer setup, admin without YAML.
+Big features are **epics** split into slices of ~400 lines at most, each
+working and live-testable on its own. New infrastructure (a frontend framework,
+Docker, a database server) must be its own decision item, never slipped into a
+feature, because this project has repeatedly and deliberately chosen the
+simpler option (039, 043, 045).
