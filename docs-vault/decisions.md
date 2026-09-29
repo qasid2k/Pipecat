@@ -1575,3 +1575,49 @@ them under one name would make "is this live?" ambiguous.
 
 **Later:** when agent turns are recorded in `turns`, the detail view can stop
 reading files, and search can extend to what was said.
+
+---
+
+## 056 — The supervisor web app moves to React (Vite + TypeScript), built output committed
+*Date: 2026-09-29 · decided by the human on IMP-009 (option C) · supersedes the
+"one HTML file, no build step, no framework" stance of the dashboard ([[decisions]] 045
+itself, push-on-change, still stands)*
+
+**Decision.** The web app is rebuilt in **React**, with **Vite** as the build
+tool and **TypeScript**. The human chose this over staying plain because the
+app will pass ~1,000 lines soon (login, call detail, admin screens), which is
+where one hand-written HTML file stops being maintainable.
+
+**How it is laid out, and why:**
+* **Source in `web/`**, built with `npm run build` into **`api/static/`**, and
+  **the built files are committed**. The VM never needs Node or npm, and may
+  have no internet: it keeps `git pull` + restart, exactly as today. The cost
+  is build output in git. Accepted, because the alternative (building on the
+  VM) adds a toolchain to the production box.
+* **A staleness guard.** The build writes `api/static/build-info.json` with a
+  hash of `web/src` and `package-lock.json`, and a Python unittest recomputes
+  it. **Commit source without rebuilding, and the suite fails.** That is what
+  stops "I changed the React code but the VM still shows the old page".
+* **The Python side does not change shape.** Same JSON API, same `WS /live`,
+  same push-on-change (045). aiohttp serves `api/static/` and returns
+  `index.html` for `/`. No CDN at runtime: everything is bundled.
+* **Frontend tests: Vitest + React Testing Library** (`npm test`). Python tests
+  stay stdlib `unittest`. The loop runs `npm test` and `npm run build` whenever
+  `web/` changes.
+* **TypeScript** because the React docs and tooling default to it, and types
+  catch the "undefined is not a function" class of bug before a supervisor
+  sees it. Explained as we go.
+* **Local development:** `npm run dev` (Vite, hot reload) proxies the API to a
+  local silent-engine bot on port **18091**, never 8091, which can be a port
+  forward to the live VM (see [[runbook]]).
+
+**Size rule.** `package-lock.json` and `api/static/` are generated. They do not
+count toward the loop's ~400-line limit, and are never hand-edited.
+
+**Order.** First a pure port with the same screens and no new features
+(IMP-011), so any regression is the port's fault and nothing else's. Then login
+(IMP-010), built in React.
+
+**Reopen when** the committed build output becomes a real problem (merge
+conflicts in `api/static/` or repo size), at which point build-on-deploy or a
+release artifact is the next step.

@@ -294,7 +294,8 @@ slices (in order; each works on its own and gets its own live check):
      agent-side turns may not be in `turns` yet (roadmap §2, deferred from
      Stage B); if not, this slice shows the caller side plus a link to
      `conversation.json`.
-  3. **Login** (IMP-010, proposed; decide IMP-009 first). One supervisor password (hash in `.env`, never in YAML), a
+  2b. **Move to React** (IMP-011, proposed; decided in IMP-009 / decisions 056).
+  3. **Login** (IMP-010, proposed; after IMP-011). One supervisor password (hash in `.env`, never in YAML), a
      session cookie, every page and API route behind it, plus a logout. This is
      what makes slice 4 safe; [[decisions]] 043 is exactly this gap.
   4. **Reachable from the office network.** Bind to a LAN address only when
@@ -597,7 +598,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-009 — Decide: keep the web app as plain HTML, or adopt a frontend framework
-status: PROPOSED
+status: DONE (decided 2026-09-29: option C, React + Vite + TypeScript; see decisions 056)
 kind: DECISION (for epic IMP-004)
 for: supervisor (what they get) and developer (what it costs to change)
 source: product theme 1; IMP-004 said to decide before slice 3
@@ -632,7 +633,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-010 — Login for the supervisor page (slice 3 of IMP-004)
-status: PROPOSED
+status: PROPOSED (re-scoped 2026-09-29: the login page is built in React, after IMP-011)
 kind: SLICE (epic: IMP-004)
 for: supervisor
 source: product theme 1; decisions 043 (the page has no auth, which is why
@@ -653,7 +654,7 @@ acceptance criteria:
     .env, or generated at start-up, which logs everyone out on restart;
     stated). HttpOnly, SameSite=Strict, 12 h lifetime, and Secure when
     behind HTTPS.
-  - `/login` (a small form page, same style) and `/logout`. Protected: `/`,
+  - `/login` (a React page in the new app, see IMP-011 / decisions 056) and `/logout`. Protected: `/`,
     `/api`, `/pool`, `/calls`, `/history*`, and `WS /live`. **Open**: `/health`
     (load balancers) and `/metrics` (numbers only, already tested to carry no
     caller data), both documented.
@@ -679,6 +680,55 @@ live check needed (on the VM): run `tools/set_password.py`, paste the lines
 risk / blast radius: `api/` and `core/config.py` only; nothing in the call
   path. The main risk is locking yourself out: removing the hash from .env
   turns login off again, and that is documented.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-011 — Rebuild the supervisor page in React, same features (web app slice 2b)
+status: PROPOSED
+kind: SLICE (epic: IMP-004)
+for: supervisor (nothing changes for them yet) and developer (everything after this builds faster)
+source: decisions 056 (the human chose React on IMP-009)
+size: L in files, M in hand-written lines (generated files don't count, per decisions 056)
+why (what they can do afterwards that they can't today): for supervisors,
+  the SAME page: capacity, agents, totals, audio health, live calls, recent
+  calls with filters, call detail. Deliberately no new features, so if anything
+  differs it's the port's fault. For development, every later screen (login,
+  agent view, admin) gets built in React components instead of one growing
+  HTML file.
+acceptance criteria:
+  - `web/`: Vite + React + TypeScript app (`npm run dev|build|test`).
+    Components: Header, Capacity, Agents, Totals, AudioHealth, LiveCalls,
+    RecentCalls (with Filters), CallDetail; a `useLive()` hook for `WS /live`
+    (reconnects, same as today); an `api.ts` for `/history` and
+    `/history/<id>`.
+  - `npm run build` writes to `api/static/` plus `build-info.json` (a hash of
+    the source and lockfile). Built files are committed.
+  - aiohttp serves `api/static/` (index.html at `/`, and hashed assets with
+    long cache headers). **`api/dashboard.html` is removed** once parity is
+    confirmed, in the same commit, so there is one page and not two.
+  - Behaviour kept exactly: push-only live updates, durations ticked in the
+    browser, the recent calls list refreshed ~1.5 s after a call ends,
+    everything escaped (React does this by default), the same colours and
+    light/dark mode.
+  - Dev proxy targets the local bot on 18091 (never 8091).
+  - Every dependency is listed in the review notes with why.
+test plan: **frontend** (Vitest + React Testing Library): each component
+  renders sample state; the live hook applies a push and reconnects on close;
+  recent calls re-fetch after a call leaves the live list; filters build the
+  right query; call detail shows chat / "caller-only" / "no transcript".
+  **Python** (unittest): `/` serves the built index.html; an asset is served
+  with a cache header; the staleness guard fails when `web/src` changes
+  without a rebuild; the existing API tests are unchanged and still pass.
+live check needed (on the VM): `git pull`, restart, open the dashboard. It
+  should look and behave like today: a live call appears and ticks; after
+  hang-up it moves into recent calls; filters and click-to-detail work;
+  light and dark mode both render. **The VM needs no Node**: confirm that by
+  NOT installing it.
+risk / blast radius: the page only; the call path and the JSON API are
+  untouched. The main risk is a missed behaviour in the port (e.g. the 1.5 s
+  refresh), which the component tests list explicitly. Rollback is
+  `git revert`, which brings dashboard.html back.
 commit: —
 why rejected: —
 Review notes: —

@@ -55,8 +55,16 @@ Each iteration does exactly ONE of the modes below, then stops.
    stop. A file whose `git diff` is empty (line endings only) doesn't count.
 10. **No new dependencies or infrastructure** (packages in `requirements.txt`, a
     frontend framework, a build step, Docker, a database server) unless the
-    approved item names it explicitly. Tests use stdlib `unittest` only, not
-    pytest.
+    approved item names it explicitly. Python tests use stdlib `unittest` only,
+    not pytest. **The web app is the exception already decided** (decisions
+    056): `web/` is React + Vite + TypeScript with Vitest. A NEW npm package
+    still needs the approved item to name it, with a reason in the review
+    notes.
+12. **Frontend changes (`web/`):** run `npm test` and `npm run build` (in
+    `web/`), and commit the rebuilt `api/static/` in the same commit as the
+    source. The Python staleness test fails otherwise. Generated files
+    (`package-lock.json`, `api/static/`) don't count toward the ~400-line
+    limit and are never hand-edited.
 11. **Explicit paths when staging** (`git add <file> …`), never `-A` or `.`.
 
 Python is `.venv\Scripts\python.exe` (Windows). Never use the system `py`
