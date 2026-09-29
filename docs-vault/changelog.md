@@ -6,6 +6,28 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-29 — The web app gets a real design: sidebar, pages, a new Live page (IMP-012)
+The old page was a rough start; this is the foundation every later screen
+builds on ([[decisions]] 057).
+
+* **A sidebar** (Live / Calls / Agents) with the connection state and uptime.
+  It becomes a top bar with a menu on small screens. Pages are `/#/live`,
+  `/#/calls` and `/#/agents`, and back/forward work.
+* **The Live page:** headline numbers (agents on call against capacity,
+  answered, transferred, and problems, which turn red only when there are
+  some), an **audio OK / N issues** badge, a **card per agent** showing
+  free/on call and, when on a call, the caller and a ticking duration, and
+  the live calls list. A loading placeholder before the first update, and an
+  "offline — reconnecting" banner instead of stale numbers that look current.
+* **Calls page:** the filterable list and the call detail side by side on wide
+  screens; rows open with the keyboard too. **Agents page:** the roster with
+  status and current call.
+* **Tailwind CSS 4 + lucide-react icons.** Colours are named tokens in
+  `web/src/theme.css`, so a rebrand edits one file.
+* **Readable in both themes, and tested:** `tests/test_theme_contrast.py`
+  checks every text/background pair against WCAG AA. It caught two misses in
+  the first draft (white on the dark-mode button was 2.4:1).
+
 ## 2026-09-29 — The supervisor page is now a React app (IMP-011, web app slice 2b)
 Same screens and behaviour as before: capacity, agents, totals, audio health,
 live calls, recent calls with filters, and call detail. They are rebuilt as

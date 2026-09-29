@@ -5,12 +5,13 @@
 // silent-engine bot on 18091 -- never 8091, which on the laptop can be a VS
 // Code port forward to the LIVE VM.
 import { defineConfig } from "vitest/config";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 
 const API = "http://127.0.0.1:18091";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   build: {
     outDir: "../api/static",
     emptyOutDir: true,

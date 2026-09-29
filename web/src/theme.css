@@ -1,0 +1,79 @@
+/*
+ * Design tokens for the supervisor web app ([[decisions]] 057).
+ *
+ * Components use SEMANTIC names (bg-surface, text-muted, text-ok, bg-busy-soft)
+ * rather than raw colours, so a rebrand is a change to the variables below and
+ * nothing else. Light and dark follow the operating system.
+ *
+ * Contrast: every text/background pair below is at least WCAG AA (4.5:1) in
+ * both themes. Check again with a contrast tool if you change them.
+ */
+@import "tailwindcss";
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --border: #e2e5ea;
+  --text: #111827;
+  --muted: #5b6474;
+  --brand: #1d4ed8;          /* accent: links, focus, current page */
+  --brand-soft: #e8efff;
+  --on-brand: #ffffff;       /* text ON a brand-coloured button */
+  --ok: #15803d;             /* free, healthy */
+  --ok-soft: #dcfce7;
+  --busy: #a1520a;           /* on a call */
+  --busy-soft: #fef3c7;
+  --bad: #b91c1c;            /* failed, turned away, audio problems */
+  --bad-soft: #fee2e2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1016;
+    --surface: #151a22;
+    --surface-2: #1c222c;
+    --border: #283040;
+    --text: #e6e9ef;
+    --muted: #9aa4b5;
+    --brand: #6ea8ff;
+    --brand-soft: rgba(110, 168, 255, 0.14);
+    --on-brand: #0d1016;     /* the dark-mode brand is light, so text on it is dark */
+    --ok: #4ade80;
+    --ok-soft: rgba(74, 222, 128, 0.13);
+    --busy: #fbbf24;
+    --busy-soft: rgba(251, 191, 36, 0.13);
+    --bad: #f87171;
+    --bad-soft: rgba(248, 113, 113, 0.14);
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-on-brand: var(--on-brand);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-busy: var(--busy);
+  --color-busy-soft: var(--busy-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html, body { background: var(--bg); color: var(--text); }
+body { font-family: var(--font-sans); }
+
+/* One focus style everywhere: visible, on-brand, keyboard only. */
+:where(a, button, input, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 6px;
+}

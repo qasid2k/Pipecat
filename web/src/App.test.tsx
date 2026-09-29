@@ -1,6 +1,6 @@
-// The behaviours the old page had, checked on the React one (IMP-011 is a pure
-// port: anything that differs is a regression).
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+// The web app's behaviours. IMP-012 redesigned the look; every behaviour the
+// IMP-011 tests checked is still checked here, against the new screens.
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, HISTORY_REFRESH_DELAY_MS } from "./App";
 import { CallDetail } from "./components/CallDetail";
@@ -16,64 +16,139 @@ async function flush() {
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 }
 
-beforeEach(() => { vi.useFakeTimers(); installFakeSocket(); });
+function go(route: string) {
+  act(() => {
+    location.hash = route;
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  installFakeSocket();
+  location.hash = "";
+});
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-describe("live connection", () => {
-  it("shows connecting, then live, then the pushed state", async () => {
-    installFakeFetch({ "/history": { calls: [] } });
+describe("shell and navigation", () => {
+  it("opens on Live and marks it as the current page", () => {
+    installFakeFetch({});
     render(<App />);
-    expect(screen.getByText("connecting…")).toBeTruthy();
-    act(() => { FakeSocket.latest().open(); FakeSocket.latest().push(liveState([{ call_id: "c1" }])); });
-    expect(screen.getByText("live")).toBeTruthy();
-    expect(screen.getByText("techbridge")).toBeTruthy();
-    expect(screen.getByText("c1")).toBeTruthy(); // call id column (first 8 chars)
-    expect(screen.getByText("up 1:05")).toBeTruthy();
+    const nav = screen.getAllByRole("navigation")[0];
+    expect(within(nav).getByText("Live").closest("a")!.getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Live");
   });
 
-  it("says disconnected and reconnects after a close", () => {
+  it("follows the hash to Calls and Agents, and back", () => {
     installFakeFetch({ "/history": { calls: [] } });
     render(<App />);
-    act(() => { FakeSocket.latest().open(); FakeSocket.latest().close(); });
-    expect(screen.getByText("disconnected")).toBeTruthy();
+    go("#/calls");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Calls");
+    go("#/agents");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Agents");
+    go("#/live");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Live");
+  });
+
+  it("sends an unknown page to Live", () => {
+    installFakeFetch({});
+    location.hash = "#/nope";
+    render(<App />);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Live");
+  });
+
+  it("opens and closes the small-screen menu", () => {
+    installFakeFetch({});
+    render(<App />);
+    const button = screen.getByRole("button", { name: /menu/i });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+  });
+});
+
+describe("live connection", () => {
+  it("shows connecting, then live, then the pushed state", () => {
+    installFakeFetch({});
+    render(<App />);
+    expect(screen.getAllByText("Connecting…").length).toBeGreaterThan(0);
+    act(() => { FakeSocket.latest().open(); FakeSocket.latest().push(liveState([{ call_id: "c1" }])); });
+    expect(screen.getAllByText("Live").length).toBeGreaterThan(1); // nav + status
+    expect(screen.getAllByText("techbridge").length).toBe(2); // sidebar + small-screen bar
+    expect(screen.getByText("c1")).toBeTruthy(); // call id column
+    expect(screen.getByText("Up 1:05")).toBeTruthy();
+  });
+
+  it("shows a skeleton until the first push arrives", () => {
+    installFakeFetch({});
+    render(<App />);
+    expect(document.querySelector('[aria-busy="true"]')).toBeTruthy();
+    act(() => { FakeSocket.latest().push(liveState()); });
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it("warns that numbers may be stale while offline, and reconnects", () => {
+    installFakeFetch({});
+    render(<App />);
+    act(() => { FakeSocket.latest().open(); FakeSocket.latest().push(liveState()); FakeSocket.latest().close(); });
+    expect(screen.getByRole("status").textContent).toMatch(/offline/i);
     expect(FakeSocket.all.length).toBe(1);
     act(() => { vi.advanceTimersByTime(RECONNECT_MS); });
     expect(FakeSocket.all.length).toBe(2);
   });
 
-  it("marks failed/turned-away/dropped counters as warnings only when non-zero", () => {
-    installFakeFetch({ "/history": { calls: [] } });
-    const { container } = render(<App />);
-    act(() => { FakeSocket.latest().push(liveState()); });
-    const warned = [...container.querySelectorAll(".stat.warn small")].map((e) => e.textContent);
-    expect(warned).toEqual(["failed"]);
+  it("flags problems only when there are some", () => {
+    installFakeFetch({});
+    render(<App />);
+    act(() => { FakeSocket.latest().push(liveState()); }); // 1 failed, 0 turned away, audio clean
+    expect(document.querySelectorAll('[data-warn="true"]').length).toBe(1);
+    expect(screen.getByText("Audio OK")).toBeTruthy();
   });
 });
 
-describe("recent calls", () => {
+describe("agent cards", () => {
+  it("shows each agent free or on a call, with the caller and a ticking duration", () => {
+    installFakeFetch({});
+    render(<App />);
+    act(() => { FakeSocket.latest().push(liveState([{ call_id: "c1", persona: "Sarah" }])); });
+    const sarah = screen.getByRole("group", { name: /Sarah/ });
+    const alex = screen.getByRole("group", { name: /Alex/ });
+    expect(within(sarah).getByText("On call")).toBeTruthy();
+    expect(within(sarah).getByText("100")).toBeTruthy();
+    expect(within(alex).getByText("Free")).toBeTruthy();
+    const before = within(sarah).getByTestId("duration").textContent;
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(within(sarah).getByTestId("duration").textContent).not.toBe(before);
+  });
+});
+
+describe("calls page", () => {
   it("loads on open and reloads ~1.5 s after a live call ends, not at once", async () => {
     const asked = installFakeFetch({ "/history": { calls: [ROW] } });
+    location.hash = "#/calls";
     render(<App />);
     await flush();
-    expect(asked.filter((u) => u.startsWith("/history?")).length).toBe(1);
+    const count = () => asked.filter((u) => u.startsWith("/history?")).length;
+    expect(count()).toBe(1);
 
     act(() => { FakeSocket.latest().push(liveState([{ call_id: "c1" }])); });
     act(() => { FakeSocket.latest().push(liveState([])); }); // c1 ended
     await flush();
-    expect(asked.filter((u) => u.startsWith("/history?")).length).toBe(1);
+    expect(count()).toBe(1);
 
     await act(async () => { vi.advanceTimersByTime(HISTORY_REFRESH_DELAY_MS); });
     await flush();
-    expect(asked.filter((u) => u.startsWith("/history?")).length).toBe(2);
+    expect(count()).toBe(2);
   });
 
   it("applies filters on submit and clears them", async () => {
     const asked = installFakeFetch({ "/history": { calls: [ROW] } });
+    location.hash = "#/calls";
     const { container } = render(<App />);
     await flush();
     fireEvent.change(container.querySelector("#f-outcome")!, { target: { value: "transferred" } });
     fireEvent.change(container.querySelector("#f-caller")!, { target: { value: "10" } });
-    fireEvent.submit(container.querySelector("form.filters")!);
+    fireEvent.submit(container.querySelector("form")!);
     await flush();
     expect(asked[asked.length - 1]).toBe("/history?limit=50&outcome=transferred&caller=10");
     fireEvent.click(screen.getByText("Clear"));
@@ -86,6 +161,7 @@ describe("recent calls", () => {
       "/history?": { calls: [ROW] },
       "/history/": { call: ROW, transcript: [{ speaker: "agent", text: "Hi, this is Sarah." }], transcript_source: "conversation" },
     });
+    location.hash = "#/calls";
     render(<App />);
     await flush();
     fireEvent.click(screen.getByText("billing"));
@@ -96,9 +172,23 @@ describe("recent calls", () => {
 
   it("says why when the history cannot be loaded", async () => {
     installFakeFetch({});
+    location.hash = "#/calls";
     render(<App />);
     await flush();
     expect(screen.getByText(/Call history is unavailable/)).toBeTruthy();
+  });
+});
+
+describe("agents page", () => {
+  it("lists every agent with its status", () => {
+    installFakeFetch({});
+    location.hash = "#/agents";
+    render(<App />);
+    act(() => { FakeSocket.latest().push(liveState([{ call_id: "c1", persona: "Sarah" }])); });
+    const rows = screen.getAllByRole("row").slice(1).map((r) => r.textContent);
+    expect(rows.length).toBe(3);
+    expect(rows.find((r) => r!.includes("Sarah"))).toMatch(/On call/);
+    expect(rows.find((r) => r!.includes("Alex"))).toMatch(/Free/);
   });
 });
 
@@ -114,7 +204,8 @@ describe("call detail", () => {
     const c = await show("conversation", [
       { speaker: "agent", text: "Hi, this is Sarah." }, { speaker: "caller", text: "Billing please." },
     ]);
-    expect([...c.querySelectorAll(".msg")].map((m) => m.className)).toEqual(["msg agent", "msg caller"]);
+    expect([...c.querySelectorAll("[data-speaker]")].map((m) => m.getAttribute("data-speaker")))
+      .toEqual(["agent", "caller"]);
     expect(screen.getByText("billing")).toBeTruthy(); // transferred to
   });
 

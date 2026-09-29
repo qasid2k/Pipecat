@@ -608,6 +608,17 @@ For live editing with hot reload: start a **silent-engine bot on 18091**
 `npm run dev` in `web/` and open the URL it prints. It proxies the API to
 18091 on purpose, never 8091, which can be a port forward to the live VM.
 
+**Pages:** `/#/live` (default), `/#/calls`, `/#/agents`. The part after `#`
+picks the page, so links and the back button work, and the server needs no
+changes for new pages ([[decisions]] 057).
+
+**Changing the colours:** edit the variables at the top of
+`web/src/theme.css` (one block for light, one for dark), then `npm run build`.
+Components only use the semantic names (`text-muted`, `bg-busy-soft`, ...),
+so nothing else changes. `tests/test_theme_contrast.py` then checks that every
+text colour is still readable (WCAG AA, 4.5:1) in both themes, and names the
+exact pair if not.
+
 `web/.npmrc` sets `legacy-peer-deps=true`: npm 10.9 crashes resolving
 Vitest 5's optional peers. Remove it once npm is fixed.
 

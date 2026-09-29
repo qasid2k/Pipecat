@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchHistory } from "../api";
 import { hhmmss } from "../format";
 import { NO_FILTERS, type CallRow, type Filters } from "../types";
+import { Card } from "./Shell";
 
 interface Props {
   agents: string[];
@@ -9,6 +10,18 @@ interface Props {
   refreshKey: number;
   selected: string | null;
   onSelect: (callId: string) => void;
+}
+
+const FIELD =
+  "rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-text placeholder:text-muted";
+
+function Label({ text, children }: { text: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+      {text}
+      {children}
+    </label>
+  );
 }
 
 /** Finished calls from the database, with the filter bar. Loaded on open and
@@ -36,54 +49,84 @@ export function RecentCalls({ agents, refreshKey, selected, onSelect }: Props) {
   const filtered = Object.values(applied).some(Boolean);
 
   return (
-    <div className="panel" style={{ marginTop: 16 }}>
-      <h2>Recent calls</h2>
-      <form className="filters" onSubmit={(e) => { e.preventDefault(); setApplied(draft); }}>
-        <label>from <input type="date" id="f-since" value={draft.since} onChange={set("since")} /></label>
-        <label>to <input type="date" id="f-until" value={draft.until} onChange={set("until")} /></label>
-        <label>agent{" "}
-          <select id="f-agent" value={draft.persona} onChange={set("persona")}>
-            <option value="">any</option>
+    <Card title="Recent calls">
+      <form
+        className="mb-4 flex flex-wrap items-end gap-3"
+        onSubmit={(e) => { e.preventDefault(); setApplied(draft); }}
+      >
+        <Label text="From"><input type="date" id="f-since" className={FIELD} value={draft.since} onChange={set("since")} /></Label>
+        <Label text="To"><input type="date" id="f-until" className={FIELD} value={draft.until} onChange={set("until")} /></Label>
+        <Label text="Agent">
+          <select id="f-agent" className={FIELD} value={draft.persona} onChange={set("persona")}>
+            <option value="">Any</option>
             {agents.map((a) => <option key={a}>{a}</option>)}
           </select>
-        </label>
-        <label>outcome{" "}
-          <select id="f-outcome" value={draft.outcome} onChange={set("outcome")}>
-            <option value="">any</option>
-            <option value="transferred">transferred</option>
-            <option value="handled">handled by the agent</option>
+        </Label>
+        <Label text="Outcome">
+          <select id="f-outcome" className={FIELD} value={draft.outcome} onChange={set("outcome")}>
+            <option value="">Any</option>
+            <option value="transferred">Transferred</option>
+            <option value="handled">Handled by the agent</option>
           </select>
-        </label>
-        <label>caller{" "}
-          <input type="search" id="f-caller" placeholder="number contains…" size={14}
+        </Label>
+        <Label text="Caller">
+          <input type="search" id="f-caller" className={FIELD} placeholder="Number contains…" size={14}
                  value={draft.caller} onChange={set("caller")} />
-        </label>
-        <button type="submit">Filter</button>
-        <button type="button" onClick={() => { setDraft(NO_FILTERS); setApplied(NO_FILTERS); }}>
-          Clear
-        </button>
+        </Label>
+        <div className="flex gap-2">
+          <button type="submit" className="rounded-lg bg-brand px-3 py-1.5 text-sm font-medium text-on-brand hover:opacity-90">
+            Filter
+          </button>
+          <button type="button" className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted hover:bg-surface-2"
+                  onClick={() => { setDraft(NO_FILTERS); setApplied(NO_FILTERS); }}>
+            Clear
+          </button>
+        </div>
       </form>
-      <table>
-        <thead>
-          <tr><th>Started</th><th>Length</th><th>Agent</th><th>Caller</th><th>How it ended</th><th>Transferred to</th></tr>
-        </thead>
-        <tbody id="history">
-          {rows.map((c) => (
-            <tr key={c.call_id} className={c.call_id === selected ? "sel" : ""} onClick={() => onSelect(c.call_id)}>
-              <td className="mono">{new Date(c.started_at).toLocaleString()}</td>
-              <td className="dur">{hhmmss(c.duration_s || 0)}</td>
-              <td>{c.persona}</td>
-              <td className="mono">{c.caller_id}</td>
-              <td>{c.cause || c.end_reason}</td>
-              <td>{c.transferred_to || "—"}</td>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted">
+              <th className="pb-2 pr-3 font-medium">Started</th>
+              <th className="pb-2 pr-3 font-medium">Length</th>
+              <th className="pb-2 pr-3 font-medium">Agent</th>
+              <th className="pb-2 pr-3 font-medium">Caller</th>
+              <th className="pb-2 pr-3 font-medium">How it ended</th>
+              <th className="pb-2 font-medium">Transferred to</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {error && <div className="empty">Call history is unavailable: {error}</div>}
+          </thead>
+          <tbody id="history">
+            {rows.map((c) => (
+              <tr
+                key={c.call_id}
+                tabIndex={0}
+                aria-selected={c.call_id === selected}
+                onClick={() => onSelect(c.call_id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(c.call_id); } }}
+                className={`cursor-pointer border-t border-border hover:bg-surface-2 ${c.call_id === selected ? "bg-brand-soft" : ""}`}
+              >
+                <td className="py-2 pr-3 whitespace-nowrap">{new Date(c.started_at).toLocaleString()}</td>
+                <td className="py-2 pr-3 font-mono tabular-nums">{hhmmss(c.duration_s || 0)}</td>
+                <td className="py-2 pr-3">{c.persona}</td>
+                <td className="py-2 pr-3 font-mono">{c.caller_id}</td>
+                <td className="py-2 pr-3 text-muted">{c.cause || c.end_reason}</td>
+                <td className="py-2">
+                  {c.transferred_to
+                    ? <span className="rounded-full bg-brand-soft px-2 py-0.5 text-xs font-medium text-brand">{c.transferred_to}</span>
+                    : <span className="text-muted">—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {error && <p className="py-6 text-center text-sm text-bad">Call history is unavailable: {error}</p>}
       {!error && rows.length === 0 && (
-        <div className="empty">{filtered ? "No calls match these filters" : "No finished calls yet"}</div>
+        <p className="py-6 text-center text-sm text-muted">
+          {filtered ? "No calls match these filters" : "No finished calls yet"}
+        </p>
       )}
-    </div>
+    </Card>
   );
 }

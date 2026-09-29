@@ -295,7 +295,7 @@ slices (in order; each works on its own and gets its own live check):
      Stage B); if not, this slice shows the caller side plus a link to
      `conversation.json`.
   2b. **Move to React** (IMP-011, DONE 2026-09-29).
-  2c. **App shell + new design + Live page** (IMP-012, proposed; decisions 057).
+  2c. **App shell + new design + Live page** (IMP-012, built; LIVE-TEST).
   2d. **Calls and Agents pages in the new design** (IMP-013, after IMP-012).
   3. **Login** (IMP-010, proposed; after the new design, so it's built in it). One supervisor password (hash in `.env`, never in YAML), a
      session cookie, every page and API route behind it, plus a logout. This is
@@ -800,7 +800,7 @@ Review notes:
   backup/2026-09-29-pre-IMP-011.
 
 ### IMP-012 — App shell, new design and the Live page (web app slice 2c)
-status: PROPOSED
+status: LIVE-TEST
 kind: SLICE (epic: IMP-004)
 for: supervisor
 source: the human's direction ("the old dashboard was a rough starting point"); decisions 057
@@ -859,6 +859,65 @@ live check needed (on the VM): hard-refresh the dashboard. The sidebar is
   design everything else builds on, so now is the cheap time to change it.
 risk / blast radius: the web app only; no Python behaviour changes. Rollback
   is `git revert` (the IMP-011 page returns).
-commit: —
+commit: on feature/multi-agent-pool (the commit titled `IMP-012: …`)
 why rejected: —
-Review notes: —
+Review notes:
+  WHAT CHANGED
+  - web/src/theme.css (new): the design tokens, meaning every colour by its
+    purpose (surface, muted text, free/on-call/problem, brand) for light and
+    dark. Replaces styles.css. This is the file to edit for a rebrand.
+  - web/src/router.ts (new, ~25 lines): reads `#/live`, `#/calls`, `#/agents`
+    from the address bar; anything else goes to Live.
+  - web/src/components/Shell.tsx (new): the sidebar / small-screen top bar,
+    nav, connection status, plus shared pieces (PageHeader, Card, StatusPill).
+  - web/src/pages/LivePage.tsx (new): headline numbers, audio badge, agent
+    cards, live calls, loading skeleton, offline banner.
+  - web/src/pages/CallsPage.tsx + AgentsPage.tsx (new).
+  - RecentCalls.tsx / CallDetail.tsx: restyled; same behaviour; rows now
+    open with Enter or Space too.
+  - Summary.tsx, LiveCalls.tsx, styles.css: removed (replaced by the above).
+  - tests: web/src/App.test.tsx rewritten for the new screens. Every IMP-011
+    behaviour is still tested, plus the router, nav, agent cards, skeleton,
+    offline banner and small-screen menu (14 → 21 tests).
+    tests/test_theme_contrast.py (new, 2 tests): WCAG AA for every colour
+    pair in both themes.
+  - api/static/: rebuilt.
+  PACKAGES added (named in this item): tailwindcss + @tailwindcss/vite
+    (styling, build time only; supports Vite 8) and lucide-react (icons; only
+    the 8 icons used are bundled). The page grew from 228 KB to 243 KB of JS
+    (76 KB compressed).
+  TWO DIFFERENCES FROM THE PROPOSAL, both honest limits:
+  - The KPI says "Answered since the last restart", not "today". The live
+    counters count from bot start; "today" needs a database query, and that
+    belongs with the Agents/stats slice (IMP-013 / slice 5).
+  - "Collapses on small screens" is built (a CSS breakpoint at 768px) and the
+    menu toggle is tested, but the actual collapse is CSS, which the test
+    browser doesn't lay out. Your resize check is the real test.
+  CAUGHT BY CHECKING, NOT ASSUMED: the first draft's colours failed AA twice
+  (the current-page highlight in light mode was 4.49:1; white text on the
+  dark-mode Filter button was 2.4:1). Fixed, and now enforced by a test.
+  ALREADY CHECKED HERE: 209 Python tests (207 + 2), 21 frontend tests, clean
+  type check, build current. Mutation checks: breaking how calls are matched
+  to agents fails 2 tests; white-on-light-blue fails the contrast test with the
+  exact pair named. Smoke on 18090/18091: spike of 5 clean, new page and
+  assets served.
+  NOT CHECKED: how it looks in a real browser (no browser here).
+  HOW TO TEST ON THE VM
+  1. `git pull` (expect the IMP-012 commit), restart bot.py, and open the
+     dashboard with a hard refresh (Ctrl+Shift+R).
+  2. The sidebar is on the left, Live is highlighted, and the corner says
+     "Live" with a pulsing green dot.
+  3. Call 6001: that agent's card turns amber "On call" with your number and
+     a ticking timer; "Agents on call" goes up. Hang up: back to "Free".
+  4. Calls: the list and, after you click a call, the chat beside it. Agents:
+     the roster.
+  5. Stop bot.py for a few seconds: a red "Offline — reconnecting" banner and
+     status appear; restart and they clear on their own.
+  6. Make the window narrow (or open it on your phone through the tunnel):
+     the sidebar becomes a top bar with a menu button.
+  7. Switch your OS between light and dark mode: both should look deliberate.
+  8. **Tell me what you don't like.** Spacing, colours, what's on the Live
+     page, what's missing. This is the design everything else builds on, so
+     now is the cheap time to change it. (Colours: one file, see runbook.)
+  UNDO: `git revert <the IMP-012 commit>` (back to the IMP-011 page), or tag
+  backup/2026-09-29-pre-IMP-012.

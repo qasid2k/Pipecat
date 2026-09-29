@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { fetchCallDetail } from "../api";
 import { hhmmss } from "../format";
 import type { CallDetailBody } from "../types";
+import { Card } from "./Shell";
 
 // What the server's `transcript_source` means for the person reading it.
 const NOTES: Record<CallDetailBody["transcript_source"], string> = {
@@ -24,39 +25,53 @@ export function CallDetail({ callId }: { callId: string }) {
     fetchCallDetail(callId)
       .then((b) => { if (current) setBody(b); })
       .catch((e: Error) => { if (current) setError(e.message); });
-    panel.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    panel.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
     return () => { current = false; };
   }, [callId]);
 
   const c = body?.call;
-  const facts: [string, string][] = c
+  const facts: [string, React.ReactNode][] = c
     ? [
-        ["started", new Date(c.started_at).toLocaleString()],
-        ["length", hhmmss(c.duration_s || 0)],
-        ["agent", c.persona || ""],
-        ["caller", c.caller_id || ""],
-        ["how it ended", c.cause || c.end_reason || ""],
-        ["transferred to", c.transferred_to || "—"],
+        ["Started", new Date(c.started_at).toLocaleString()],
+        ["Length", hhmmss(c.duration_s || 0)],
+        ["Agent", c.persona || "—"],
+        ["Caller", <span className="font-mono">{c.caller_id || "—"}</span>],
+        ["How it ended", c.cause || c.end_reason || "—"],
+        ["Transferred to", c.transferred_to || "—"],
       ]
     : [];
+  const note = error ? `Could not load this call: ${error}` : body ? NOTES[body.transcript_source] : "Loading…";
 
   return (
-    <div className="panel" id="call-detail" ref={panel} style={{ marginTop: 16 }}>
-      <h2>Call <span className="mono">{callId.slice(0, 8)}</span></h2>
-      <div className="facts">
-        {facts.map(([k, v]) => <div key={k}><small>{k}</small>{v}</div>)}
-      </div>
-      <div className="chat">
-        {body?.transcript.map((t, i) => (
-          <div key={i} className={`msg ${t.speaker === "agent" ? "agent" : "caller"}`}>
-            <small>{t.speaker === "agent" ? c?.persona || "agent" : "caller"}</small>
-            {t.text}
-          </div>
-        ))}
-      </div>
-      <div className="empty">
-        {error ? `Could not load this call: ${error}` : body ? NOTES[body.transcript_source] : "Loading…"}
-      </div>
+    <div id="call-detail" ref={panel}>
+      <Card title={`Call ${callId.slice(0, 8)}`}>
+        <dl className="mb-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+          {facts.map(([k, v]) => (
+            <div key={k}>
+              <dt className="text-xs text-muted">{k}</dt>
+              <dd className="mt-0.5">{v}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="flex flex-col gap-2">
+          {body?.transcript.map((t, i) => {
+            const agent = t.speaker === "agent";
+            return (
+              <div
+                key={i}
+                data-speaker={agent ? "agent" : "caller"}
+                className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm ${
+                  agent ? "self-end rounded-br-sm bg-brand-soft" : "self-start rounded-bl-sm border border-border bg-surface-2"
+                }`}
+              >
+                <div className="mb-0.5 text-xs font-medium text-muted">{agent ? c?.persona || "Agent" : "Caller"}</div>
+                {t.text}
+              </div>
+            );
+          })}
+        </div>
+        {note && <p className={`pt-4 text-center text-sm ${error ? "text-bad" : "text-muted"}`}>{note}</p>}
+      </Card>
     </div>
   );
 }
