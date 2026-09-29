@@ -548,6 +548,10 @@ class ApiServer:
             "# TYPE voiceagent_time_to_greeting_seconds summary",
             f"voiceagent_time_to_greeting_seconds_sum {c.greeting_seconds_total:.3f}",
             f"voiceagent_time_to_greeting_seconds_count {c.greetings_total}",
+            "# HELP voiceagent_reply_seconds Caller stops speaking to first agent audio, per turn.",
+            "# TYPE voiceagent_reply_seconds summary",
+            f"voiceagent_reply_seconds_sum {c.reply_seconds_total:.3f}",
+            f"voiceagent_reply_seconds_count {c.replies_total}",
         ]
         # What a call COSTS, in the standard Prometheus process-metric names so
         # any scraper recognises them. CPU is a counter: sample it twice and the

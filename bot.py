@@ -87,6 +87,9 @@ def _call_record(
         transcript_path=result.transcript_path if result else "",
         conversation_path=result.conversation_path if result else "",
         time_to_greeting_s=result.time_to_greeting_s if result else None,
+        reply_turns=result.reply_turns if result else None,
+        reply_median_s=result.reply_median_s if result else None,
+        reply_max_s=result.reply_max_s if result else None,
         **io_stats,
     )
 
@@ -231,6 +234,9 @@ async def _serve(
             if result is not None and result.time_to_greeting_s is not None:
                 counters.greetings_total += 1
                 counters.greeting_seconds_total += result.time_to_greeting_s
+            if result is not None and result.reply_turns:
+                counters.replies_total += result.reply_turns
+                counters.reply_seconds_total += result.reply_seconds_total
             if record.transferred_to:
                 counters.transfers_total += 1
 

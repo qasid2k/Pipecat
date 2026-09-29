@@ -56,6 +56,12 @@ class EngineResult:
     # greeting going out, or None if the agent never spoke. The rest of the
     # breakdown is only logged; this total is what /metrics averages.
     time_to_greeting_s: float | None = None
+    # How long the agent took to reply, over the call's measured turns
+    # (IMP-016). None when no turn was measured -- unknown, not instant.
+    reply_turns: int = 0
+    reply_median_s: float | None = None
+    reply_max_s: float | None = None
+    reply_seconds_total: float = 0.0
 
 
 class Engine(ABC):

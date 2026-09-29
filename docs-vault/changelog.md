@@ -6,6 +6,19 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-29 — Every reply is timed (IMP-016, the measuring half)
+Each time the agent answers, the log gets one line:
+`turn: reply after 1950 ms (end of turn 940 ms · AI first words 720 ms · voice 210 ms)`.
+Each call stores how many replies were measured, the typical (median) and the
+slowest, and `/metrics` carries `voiceagent_reply_seconds` (sum + count).
+
+* The measuring is Pipecat's own `UserBotLatencyObserver`: from when the caller
+  ACTUALLY stopped speaking (the voice detector's delay is subtracted) to the
+  agent's first audio. The worker now runs with `enable_metrics=True`, which
+  is what splits a reply into its parts.
+* Three new call columns, added by the IMP-013 migrations on first start.
+* This is only the measuring. The fix comes next, chosen from real numbers.
+
 ## 2026-09-29 — The call database can grow, and records two new facts (IMP-013)
 Until now a new column could never reach an existing `calls.db`:
 `CREATE TABLE IF NOT EXISTS` leaves an existing table alone. The store now adds

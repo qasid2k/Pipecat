@@ -1144,7 +1144,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-016 — Measure, then cut, how long the agent takes to reply
-status: APPROVED
+status: LIVE-TEST (the measuring half; the fix follows from your numbers)
 kind: SLICE (backend focus #3; after IMP-013)
 for: caller
 source: Stage E laptop measurements (2.3–2.6 s reply, one 11.6 s); voice-agent research (good: under 1.5 s typical)
@@ -1168,9 +1168,48 @@ live check needed (on the VM): 3 calls with a few questions each, then the
   `turn:` lines and the per-call numbers. That shows where the time goes.
 risk / blast radius: measurement only, until the chosen fix (which is its own
   commit with its own live check).
-commit: —
+commit: on feature/multi-agent-pool (the commit titled `IMP-016: …`)
 why rejected: —
-Review notes: —
+Review notes:
+  WHAT CHANGED
+  - engine/turn_timing.py (new, small): keeps one call's reply times (count,
+    median, slowest) and writes the `turn:` line.
+  - engine/pipecat_engine.py: plugs in Pipecat's OWN latency observer rather
+    than writing our own. It measures from when the caller actually stopped
+    (it subtracts the voice detector's confirmation delay) to the agent's
+    first audio. The worker now runs with `enable_metrics=True`, which is
+    what lets each service report its own time and split a reply into:
+    end of turn / AI first words / voice.
+  - core/engine.py, core/records.py, stores/sqlite_store.py, bot.py: three new
+    call columns (reply_turns, reply_median_s, reply_max_s). The IMP-013
+    migrations add them to your existing database automatically.
+  - core/live.py + api/server.py: `voiceagent_reply_seconds` on /metrics.
+  - tests/test_reply_time.py (8), including one that drives Pipecat's REAL
+    observer with frames and checks our handlers get its measurement.
+  - docs: changelog, runbook troubleshooting row.
+  CAUGHT BY A TEST: my first matcher filed speech-to-text's timing under
+  "voice", because "DeepgramSTTService" contains the letters "TTS". Now it
+  matches the full "TTSService" / "LLMService" names.
+  ALREADY CHECKED HERE: 245 tests pass (237 + 8). Smoke on 18090/18091:
+  clean, the reply metric is on /metrics, and start-up logged adding the 3 new
+  columns (the IMP-013 system doing its job a second time). The silent test
+  engine has no AI, so replies can only be measured on a real call.
+  UNKNOWN UNTIL THE LIVE CALL: `enable_metrics=True` is new for the real
+  engine. It should only add measurements, but watch for anything unusual.
+  HOW TO TEST ON THE VM
+  1. `git pull`, restart. The log shows `Records: added column calls.reply_...`
+     three times (once only).
+  2. Make 2–3 calls and ask 3–4 questions in each (short and long ones).
+  3. Read the turn lines: `grep "turn:" logs/agent.jsonl | tail -12`
+     (or watch the console). Each reply shows its total and its parts.
+  4. Per call: python -c "import sqlite3; c=sqlite3.connect('records/calls.db'); print(c.execute('select started_at, reply_turns, reply_median_s, reply_max_s from calls order by started_at desc limit 3').fetchall())"
+  5. **Send me the turn lines.** The biggest part decides the fix:
+     - "end of turn" big → lower `turn_taking.silence_timeout_s` (now 0.6 s)
+       and check the voice detector's stop delay;
+     - "AI first words" big → the model (compare a lighter one);
+     - "voice" big → text-to-speech settings.
+  UNDO: `git revert <the IMP-016 commit>` (the new columns are harmless), or
+  tag backup/2026-09-29-pre-IMP-016.
 
 ### IMP-017 — When nobody answers a transfer, the AI takes a message
 status: APPROVED

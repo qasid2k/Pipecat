@@ -34,3 +34,4 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-29 16:20 | UNTESTED | IMP-008 | tests 225 | user moved on before the live check; new status UNTESTED (doesn't gate) |
 | 2026-09-29 17:00 | BUILD | IMP-013 | tests 225→237 | additive migrations + agent_speaking_at_end + time_to_greeting_s; real 60-row DB migrated; LIVE-TEST |
 | 2026-09-29 17:40 | VERIFIED | IMP-013 | tests 237 | live: columns added once, old calls kept, speaking-at-end 1 and 0 both seen; tagged release/2026-09-29-IMP-013 |
+| 2026-09-29 18:30 | BUILD | IMP-016 | tests 237→245 | reply time measured per turn (Pipecat observer), stored per call, on /metrics; LIVE-TEST |

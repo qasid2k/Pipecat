@@ -36,7 +36,8 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import EndFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
+from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -61,6 +62,7 @@ from engine.failover import LLMWatchdog, around_llm
 from engine.session_transport import CallSessionTransport
 from engine.silence import SilenceAction, SilencePolicy
 from engine.timing import format_setup, setup_breakdown
+from engine.turn_timing import ReplyStats, format_turn, turn_parts
 from engine.transcripts import TranscriptRecorder, save_conversation
 
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
@@ -167,6 +169,32 @@ TRANSFER_TOOL = FunctionSchema(
     required=["department"],
     handler=transfer_to_department,
 )
+
+
+def attach_reply_timing(stats: ReplyStats, log=logger.info) -> UserBotLatencyObserver:
+    """Pipecat's own reply-latency observer, reporting into `stats` and the log.
+
+    Pipecat does the measuring (caller actually stopped -> first agent audio,
+    with the voice detector's confirmation delay subtracted); we keep the
+    call's summary and write one `turn:` line per reply. `on_latency_measured`
+    fires just before `on_latency_breakdown` for the same turn, so the number
+    is held for a moment and logged with its parts. The per-service parts only
+    exist when the worker runs with `enable_metrics=True`.
+    """
+    observer = UserBotLatencyObserver()
+    latest: list[float] = []
+
+    @observer.event_handler("on_latency_measured")
+    async def on_measured(_observer, latency: float):
+        stats.add(latency)
+        latest[:] = [latency]
+
+    @observer.event_handler("on_latency_breakdown")
+    async def on_breakdown(_observer, breakdown):
+        if latest:
+            log(format_turn(latest.pop(), turn_parts(breakdown)))
+
+    return observer
 
 
 class PipecatEngine(Engine):
@@ -395,10 +423,15 @@ class PipecatEngine(Engine):
             session=session,
             announce_secs=self._config.transfer_announce_s,
         )
+        # Reply timing (IMP-016). enable_metrics makes each service report its
+        # time-to-first-byte, which is what splits a slow reply into parts.
+        replies = ReplyStats()
         task = PipelineWorker(
             pipeline,
             idle_timeout_secs=self._config.idle_timeout_s,
             app_resources=resources,
+            params=PipelineParams(enable_metrics=True),
+            observers=[attach_reply_timing(replies)],
         )
         runner = WorkerRunner(handle_sigint=False)
 
@@ -527,4 +560,8 @@ class PipecatEngine(Engine):
             conversation_path=str(conversation_path),
             turns=recorder.turns,
             time_to_greeting_s=time_to_greeting,
+            reply_turns=replies.count,
+            reply_median_s=replies.median,
+            reply_max_s=replies.slowest,
+            reply_seconds_total=replies.total,
         )

@@ -93,6 +93,10 @@ class CallRecord:
     agent_speaking_at_end: bool | None = None
     # Seconds from the audio connection to the first word of the greeting. (engine)
     time_to_greeting_s: float | None = None
+    # Added by IMP-016: reply time over the call's measured turns. (engine)
+    reply_turns: int | None = None
+    reply_median_s: float | None = None
+    reply_max_s: float | None = None
 
 
 @dataclass(frozen=True)

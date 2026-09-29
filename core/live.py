@@ -126,6 +126,10 @@ class Counters:
     # average it over any window. Calls the agent never spoke on are left out.
     greetings_total: int = 0
     greeting_seconds_total: float = 0.0
+    # Every measured reply across all calls (IMP-016): sum + count, averaged
+    # by whoever scrapes them, like the greeting.
+    replies_total: int = 0
+    reply_seconds_total: float = 0.0
 
     @property
     def uptime_s(self) -> float:
@@ -142,4 +146,6 @@ class Counters:
             "pacer_slips_total": self.pacer_slips_total,
             "greetings_total": self.greetings_total,
             "greeting_seconds_total": round(self.greeting_seconds_total, 3),
+            "replies_total": self.replies_total,
+            "reply_seconds_total": round(self.reply_seconds_total, 3),
         }

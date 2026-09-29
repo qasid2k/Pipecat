@@ -72,7 +72,10 @@ CREATE TABLE IF NOT EXISTS calls (
     conversation_path TEXT,
     node_id           TEXT,
     agent_speaking_at_end INTEGER,
-    time_to_greeting_s    REAL
+    time_to_greeting_s    REAL,
+    reply_turns           INTEGER,
+    reply_median_s        REAL,
+    reply_max_s           REAL
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -105,6 +108,7 @@ _CALL_COLUMNS = [
     "pacer_slips",
     "transcript_path", "conversation_path", "node_id",
     "agent_speaking_at_end", "time_to_greeting_s",
+    "reply_turns", "reply_median_s", "reply_max_s",
 ]
 
 # Columns added AFTER databases already existed in the field, oldest first.
@@ -117,6 +121,9 @@ _CALL_COLUMNS = [
 ADDED_CALL_COLUMNS: list[tuple[str, str]] = [
     ("agent_speaking_at_end", "INTEGER"),  # IMP-013
     ("time_to_greeting_s", "REAL"),        # IMP-013
+    ("reply_turns", "INTEGER"),            # IMP-016
+    ("reply_median_s", "REAL"),            # IMP-016
+    ("reply_max_s", "REAL"),               # IMP-016
 ]
 
 
