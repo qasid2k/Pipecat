@@ -32,7 +32,9 @@ pushed, **waiting for your VM check** (nothing new is built meanwhile) · `DONE`
 you confirmed it works live · `REJECTED` you said no · `BLOCKED` the loop could
 not finish it, and the reason is on the item. · `PARKED` set aside on
 purpose by you: it doesn't block the loop and isn't built until you set it back to
-`APPROVED` (or `LIVE-TEST`). (`READY-FOR-REVIEW` is from the
+`APPROVED` (or `LIVE-TEST`). · `UNTESTED` built and pushed, but you chose to
+move on before the live check: it doesn't block the loop, and the loop reminds
+you of it at the end of each build until you report the result. (`READY-FOR-REVIEW` is from the
 old branch-per-item flow; IMP-002 is the last item to use it.)
 
 ### Item template
@@ -561,7 +563,7 @@ Review notes:
   backup/2026-09-29-pre-IMP-007.
 
 ### IMP-008 — When the AI model fails, the caller hears an apology and a human, not silence
-status: LIVE-TEST
+status: UNTESTED (built + pushed 2026-09-29; live check still owed: see its Review notes)
 kind: FIX
 for: caller
 source: live call 2026-09-28 17:47 (Gemini `503 high demand` after 16 s of silence; the caller hung up, and no transfer happened)
@@ -976,7 +978,7 @@ Review notes:
   backup/2026-09-29-pre-IMP-012.
 
 ### IMP-013 — Let the call database grow: add columns safely, and record two new facts per call
-status: APPROVED
+status: IN-PROGRESS
 kind: SLICE (epic: IMP-004; step 1 of [[web-app-design]] "honest numbers", part 1 of 3)
 for: supervisor (indirectly: the facts the next slices need), developer
 source: web-app-design v2; IMP-002 noted the store has no migrations

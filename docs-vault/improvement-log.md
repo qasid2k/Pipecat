@@ -31,3 +31,4 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-29 14:30 | PROPOSE+APPROVE | IMP-013..015 | tests 209 | design v2 accepted; honest numbers = migrations+facts, outcome rule+time zone, masking |
 | 2026-09-29 15:10 | REPLAN | IMP-008,013,016-019 | tests 209 | backend focus: fallback → schema → reply speed → messages → login → privacy; frontend parked |
 | 2026-09-29 16:00 | BUILD | IMP-008 | tests 209→225 | model error/silence → apology + transfer to human; LIVE-TEST |
+| 2026-09-29 16:20 | UNTESTED | IMP-008 | tests 225 | user moved on before the live check; new status UNTESTED (doesn't gate) |

@@ -86,7 +86,10 @@ The test count is the `Ran N tests` line.
    items are `PROPOSED`. Otherwise report "waiting for the live test of IMP-…"
    and stop.
    Items in `PARKED` were set aside by the human: they never gate the loop and
-   are never built, even if their code is already committed.
+   are never built, even if their code is already committed. Items in
+   `UNTESTED` are built and pushed but their live check is still owed: they
+   don't gate the loop either, but list them in the end-of-iteration summary
+   every time, so they aren't forgotten.
 5. **An item still in `IN-PROGRESS`** means a previous iteration died
    mid-build. Look at `git log`: if its commit exists, go to B5; if not,
    discard its uncommitted changes to tracked files (only the files that item
