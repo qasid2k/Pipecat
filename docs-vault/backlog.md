@@ -296,7 +296,11 @@ slices (in order; each works on its own and gets its own live check):
      `conversation.json`.
   2b. **Move to React** (IMP-011, DONE 2026-09-29).
   2c. **App shell + new design + Live page** (IMP-012, built; LIVE-TEST).
-  2d. **Calls and Agents pages in the new design** (IMP-013, after IMP-012).
+  2d. Superseded by the page plan in [[web-app-design]] (v2, accepted
+      2026-09-29). Its build order replaces the remaining slices here:
+      honest numbers (IMP-013..015) → Insights → couldn't get through →
+      Calls + export → System health → Agents → login → listen/transfer →
+      Settings.
   3. **Login** (IMP-010, proposed; after the new design, so it's built in it). One supervisor password (hash in `.env`, never in YAML), a
      session cookie, every page and API route behind it, plus a logout. This is
      what makes slice 4 safe; [[decisions]] 043 is exactly this gap.
@@ -921,3 +925,125 @@ Review notes:
      now is the cheap time to change it. (Colours: one file, see runbook.)
   UNDO: `git revert <the IMP-012 commit>` (back to the IMP-011 page), or tag
   backup/2026-09-29-pre-IMP-012.
+
+### IMP-013 — Let the call database grow: add columns safely, and record two new facts per call
+status: APPROVED
+kind: SLICE (epic: IMP-004; step 1 of [[web-app-design]] "honest numbers", part 1 of 3)
+for: supervisor (indirectly: the facts the next slices need), developer
+source: web-app-design v2; IMP-002 noted the store has no migrations
+size: S–M
+why (what they can do afterwards that they can't today): nothing visible yet.
+  Today the database can never gain a column: `CREATE TABLE IF NOT EXISTS`
+  silently skips the VM's existing `calls.db`, so any new per-call fact would
+  quietly never be saved. This makes adding columns safe, then records the two
+  facts the honest numbers need.
+acceptance criteria:
+  - **Additive migrations in `stores/sqlite_store.py`:** on start, compare the
+    `calls` columns (`PRAGMA table_info`) with the schema and `ALTER TABLE ADD
+    COLUMN` any that are missing, with a default. Only ever ADD: never drop,
+    rename or rewrite. It is idempotent (starting twice changes nothing) and
+    logs each column it adds. Existing rows keep their data.
+  - **New per-call facts**, saved on every call from now on:
+      - `agent_speaking_at_end` (0/1): was the agent mid-sentence when the call
+        ended? The AudioSocket write thread already knows when it last sent
+        real speech (it stamps the first; now also the last). "Speaking" means
+        real audio sent in the last ~0.5 s before the end.
+      - `time_to_greeting_s`: IMP-002's measurement, which is only in the log
+        today (needed by System health and the Calls timing strip later).
+  - Old rows read these as NULL ("not recorded"), never as 0/false, so older
+    calls are never mislabelled.
+test plan (offline): migrate a database created with the OLD schema (rows
+  survive, columns appear, a second start is a no-op); a fresh database gets
+  everything; the write thread stamps the last real frame; a call that ends
+  during speech records 1, silence records 0; the record carries
+  time_to_greeting_s. Silent-engine smoke on 18090/18091.
+live check needed (on the VM): `git pull`, restart: the log shows
+  "added column agent_speaking_at_end" and "added column time_to_greeting_s"
+  ONCE (restart again: nothing). Old calls still show on the dashboard. Make 2
+  calls: hang up once while the agent is talking and once in silence, then run
+  `sqlite3 records/calls.db "select agent_speaking_at_end,
+  time_to_greeting_s from calls order by started_at desc limit 2"`: 1 and 0,
+  with a time for each.
+risk / blast radius: touches the live database on start-up. Mitigated by
+  additive-only changes, a test on an old-schema copy, and a backup step in the
+  live check (copy calls.db first).
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-014 — "Resolved by the AI", "Unclear", and a business time zone
+status: APPROVED
+kind: SLICE (epic: IMP-004; "honest numbers", part 2 of 3)
+for: supervisor, manager
+source: web-app-design v2 (definitions section)
+size: M
+why (what they can do afterwards that they can't today): every finished call
+  gets one plain outcome that doesn't flatter the AI: Resolved by AI, Sent to
+  <department>, Unclear (with the reason), Caller went quiet, Failed. The
+  Calls page shows it as a chip and can filter by it. "Today" means today in
+  your business's time zone, not UTC.
+acceptance criteria:
+  - **The rule, in ONE place** (a small pure function, e.g. `core/outcomes.py`)
+    so every page agrees: transferred → Sent to a human; engine failure →
+    Failed; the IMP-001 check-in ended it → Caller went quiet; otherwise
+    Resolved **only if** it lasted > 10 s AND `agent_speaking_at_end` is not 1
+    AND the same caller didn't call again within 24 h; else Unclear with the
+    reason ("hung up mid-answer", "very short", "called back"). Calls from
+    before IMP-013 (NULL) are judged on what they have and marked "(older call,
+    less data)". The thresholds are config, not code.
+  - `/history` rows carry `outcome` and `outcome_reason`; the outcome filter
+    gains resolved / unclear / failed / went quiet. The repeat-call check is
+    one indexed query (caller_id + time), off the event loop as usual.
+  - **Business time zone:** `service.timezone` (default `UTC`, validated at
+    start-up), used for date filters. **Adds the `tzdata` package** to
+    requirements.txt: Windows has no time-zone database, so without it the
+    laptop can't run the tests (the Linux VM would work either way).
+  - Calls page: an outcome chip per row (the colours from theme.css) and the
+    new outcome options in the filter.
+test plan (offline): the outcome function over every branch and edge (10 s
+  exactly, NULL facts, callback at 23 h vs 25 h, transferred AND short = sent to
+  a human); config validation of the time zone and thresholds; `/history`
+  outcome + filter against a temp database; date filters across a time-zone
+  boundary (23:30 UTC is "tomorrow" in some zones); frontend: chips render and
+  filter.
+live check needed (on the VM): set `service.timezone: Europe/London` (or
+  yours). Make 3 calls: one normal conversation, one where you hang up while
+  the agent is talking, one you call back straight after. On Calls: the first
+  shows Resolved by AI; the second shows Unclear · hung up mid-answer; the
+  first number's earlier call flips to Unclear · called back. Filter by Unclear.
+risk / blast radius: API + one config key + one small dependency; nothing in
+  the call path.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-015 — Mask caller numbers by default
+status: APPROVED
+kind: SLICE (epic: IMP-004; "honest numbers", part 3 of 3)
+for: supervisor (and anyone who can see their screen)
+source: web-app-design v2 ("private by default"); roadmap §5 privacy gap
+size: S
+why (what they can do afterwards that they can't today): the dashboard can
+  sit on a shared screen without showing everyone's phone numbers: `+44 •••
+  0123`. Before login exists this is the safe default; after login (IMP-010),
+  logged-in supervisors see full numbers again.
+acceptance criteria:
+  - `service.api.mask_caller_numbers` (default **true**). Masking happens on
+    the SERVER in every response and live push that carries a number
+    (`/calls`, `/history`, `/history/<id>`, `WS /live`), so full numbers never
+    reach the browser. Keep the country prefix and the last 4 digits; short
+    internal extensions such as `100` are shown as-is.
+  - Caller search still works on the full number (the server searches, then
+    masks the result).
+  - With it set to false, today's behaviour exactly.
+test plan (offline): the mask function (international, national, short
+  extensions, "unknown"); every endpoint and the live push masked when on and
+  full when off; search by digits still finds a masked call; `/metrics` still
+  has no numbers.
+live check needed (on the VM): restart, open the dashboard: numbers show as
+  `+44 ••• 0123` (your SIP extension `100` stays `100`). Search Calls by part
+  of a number: still found. Set it to false, restart: full numbers again.
+risk / blast radius: API only; a display change.
+commit: —
+why rejected: —
+Review notes: —

@@ -28,3 +28,4 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-29 12:30 | VERIFIED | IMP-011 | tests 207 (+14 web) | live on VM: React page works, no Node on VM; tagged release/2026-09-29-IMP-011 |
 | 2026-09-29 12:40 | APPROVE | IMP-012 | tests 207 | approved; colours can change later |
 | 2026-09-29 13:30 | BUILD | IMP-012 | tests 207→209 (web 14→21) | new design: sidebar, pages, Live page; AA contrast enforced; LIVE-TEST |
+| 2026-09-29 14:30 | PROPOSE+APPROVE | IMP-013..015 | tests 209 | design v2 accepted; honest numbers = migrations+facts, outcome rule+time zone, masking |
