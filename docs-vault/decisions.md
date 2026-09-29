@@ -1621,3 +1621,34 @@ count toward the loop's ~400-line limit, and are never hand-edited.
 **Reopen when** the committed build output becomes a real problem (merge
 conflicts in `api/static/` or repo size), at which point build-on-deploy or a
 release artifact is the next step.
+
+---
+
+## 057 — The web app gets a real design: Tailwind, a sidebar, separate pages
+*Date: 2026-09-29 · decided by the human after the React port (IMP-011)*
+
+**Context.** The human's direction: the old HTML dashboard "was a rough
+starting point", so improve the UI going forward rather than preserve it.
+
+**Decisions (the human chose the first two):**
+* **Tailwind CSS** for styling, with a small token layer (brand accent, status
+  colours for free/busy/warning/error, surfaces, spacing) in one CSS file, and
+  light/dark following the system. Build-time only, no runtime cost. Chosen
+  over a component library (whose look shows through) and hand-written CSS
+  (slower to reach a polished UI).
+* **A sidebar with separate pages:** Live, Calls, Agents now; Settings/Admin
+  later (theme 3). It scales as screens are added. On narrow screens the
+  sidebar collapses into a top bar.
+* **Hash routing (`/#/calls`) with a ~30-line router of our own**, not
+  react-router. Two reasons: no extra dependency for three routes, and no
+  clash with API paths (`/calls` is already an API route, so path-based
+  routing would need the server to tell pages from API calls).
+* **Icons: `lucide-react`** (tree-shaken, only the icons used are bundled).
+
+**The quality bar every web-app slice now carries:** clear visual hierarchy;
+loading, empty and error states on every panel; keyboard access and visible
+focus; text contrast that passes WCAG AA in both themes; usable at tablet and
+phone widths. "It works" is not the same as "it's done".
+
+**Order:** the design foundation comes BEFORE login (IMP-010), so login is
+built in the new look instead of being redone.

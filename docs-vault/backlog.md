@@ -295,7 +295,9 @@ slices (in order; each works on its own and gets its own live check):
      Stage B); if not, this slice shows the caller side plus a link to
      `conversation.json`.
   2b. **Move to React** (IMP-011, built; LIVE-TEST).
-  3. **Login** (IMP-010, proposed; after IMP-011). One supervisor password (hash in `.env`, never in YAML), a
+  2c. **App shell + new design + Live page** (IMP-012, proposed; decisions 057).
+  2d. **Calls and Agents pages in the new design** (IMP-013, after IMP-012).
+  3. **Login** (IMP-010, proposed; after the new design, so it's built in it). One supervisor password (hash in `.env`, never in YAML), a
      session cookie, every page and API route behind it, plus a logout. This is
      what makes slice 4 safe; [[decisions]] 043 is exactly this gap.
   4. **Reachable from the office network.** Bind to a LAN address only when
@@ -633,7 +635,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-010 — Login for the supervisor page (slice 3 of IMP-004)
-status: PROPOSED (re-scoped 2026-09-29: the login page is built in React, after IMP-011)
+status: PROPOSED (re-scoped 2026-09-29: built in React, in the new design, after IMP-012/013)
 kind: SLICE (epic: IMP-004)
 for: supervisor
 source: product theme 1; decisions 043 (the page has no auth, which is why
@@ -796,3 +798,67 @@ Review notes:
   what.
   UNDO: `git revert <the IMP-011 commit>` brings dashboard.html back; or tag
   backup/2026-09-29-pre-IMP-011.
+
+### IMP-012 — App shell, new design and the Live page (web app slice 2c)
+status: PROPOSED
+kind: SLICE (epic: IMP-004)
+for: supervisor
+source: the human's direction ("the old dashboard was a rough starting point"); decisions 057
+size: M (hand-written)
+why (what they can do afterwards that they can't today): the app stops being
+  one long page. It gets a sidebar (Live, Calls, Agents) and a Live page
+  designed for glancing at from across a room: who is on a call right now,
+  with whom, for how long, and whether anything is wrong. Everything after
+  (the Calls and Agents pages, login, admin) plugs into the same shell and
+  looks consistent.
+acceptance criteria:
+  - **Packages (named here, per the loop's rules):** `tailwindcss` +
+    `@tailwindcss/vite` (styling, build time only) and `lucide-react` (icons).
+    If Tailwind's Vite plugin doesn't support Vite 8, stop and report; don't
+    downgrade Vite.
+  - **Shell:** left sidebar with the product name, nav (Live / Calls /
+    Agents, icon + label, current page highlighted), and at the bottom the
+    connection status (live / reconnecting / offline) and uptime. Below
+    ~768px it collapses into a top bar with a menu button.
+  - **Routing:** `/#/live` (default), `/#/calls`, `/#/agents`, via a small
+    hash router in `web/src/router.ts`. Back/forward work. An unknown hash
+    goes to Live.
+  - **Design tokens** in `web/src/theme.css`: brand accent, status colours
+    (free = green, on call = amber, warning/error = red), neutral surfaces for
+    light and dark (following the system), radius and spacing scale. The old
+    styles.css is deleted.
+  - **Live page, redesigned:**
+      - a KPI row: agents on call / capacity (with a small bar), calls answered
+        today, transferred, failed or turned away (red only when non-zero),
+        audio health as a single OK / "N issues" badge
+      - **agent cards**, one per agent: name, status pill, and when on a call
+        the caller number and a ticking duration (joined from the live calls by
+        agent name). Free agents are visually quiet; busy ones stand out
+      - live calls as a compact list, longest first
+      - loading skeleton before the first push; "offline, reconnecting…" banner
+        when the socket is down (instead of stale numbers looking current)
+  - **Calls and Agents pages** exist in the nav and, for this slice, show
+    today's Recent calls / Call detail components inside the new shell
+    (restyled with the tokens) and a simple agent list, so nothing is lost.
+    Their full redesign is IMP-013.
+  - Accessibility: every nav item and card is keyboard-focusable with a visible
+    focus ring; colour is never the ONLY signal (pills also carry text);
+    contrast at WCAG AA in both themes.
+test plan: Vitest: the router (default, unknown hash, back/forward), the
+  sidebar marking the current page, agent cards joining live calls to agents
+  and ticking, the KPI warning state only when non-zero, the loading skeleton
+  and offline banner, and the collapsed top bar at a narrow width. Python:
+  staleness guard and serving tests stay green. Silent-engine smoke on
+  18090/18091.
+live check needed (on the VM): hard-refresh the dashboard. The sidebar is
+  there, and Live is the default. Call 6001: that agent's card turns "on call",
+  shows your number and ticks; the KPI updates; hang up and it returns to
+  free. Stop bot.py: the offline banner appears; restart and it clears.
+  Resize the window narrow: the sidebar becomes a top bar. Check light and
+  dark mode. **Tell me what you don't like about the look**: this is the
+  design everything else builds on, so now is the cheap time to change it.
+risk / blast radius: the web app only; no Python behaviour changes. Rollback
+  is `git revert` (the IMP-011 page returns).
+commit: —
+why rejected: —
+Review notes: —

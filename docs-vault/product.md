@@ -35,7 +35,10 @@ Each theme is a direction, not a task. The loop turns them into **epics**
 (multi-step features) and then into slices small enough to build and live-test
 one at a time.
 
-1. **Supervisor web app.** Replace the status page with a real frontend: a
+1. **Supervisor web app.** *(React + Tailwind, sidebar + pages; decisions 056,
+   057. The UI itself is part of the product: every slice improves how it
+   looks and feels, not just what it shows.)* Replace the status page with a
+   real frontend: a
    login, live calls, **call history with search and filters**, a call detail
    view (transcript, persona, cause, transfer, timings), and agent/persona
    status. **Authentication comes first**, because `/calls` exposes caller
