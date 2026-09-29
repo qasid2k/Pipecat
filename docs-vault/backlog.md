@@ -294,7 +294,7 @@ slices (in order; each works on its own and gets its own live check):
      agent-side turns may not be in `turns` yet (roadmap §2, deferred from
      Stage B); if not, this slice shows the caller side plus a link to
      `conversation.json`.
-  2b. **Move to React** (IMP-011, built; LIVE-TEST).
+  2b. **Move to React** (IMP-011, DONE 2026-09-29).
   2c. **App shell + new design + Live page** (IMP-012, proposed; decisions 057).
   2d. **Calls and Agents pages in the new design** (IMP-013, after IMP-012).
   3. **Login** (IMP-010, proposed; after the new design, so it's built in it). One supervisor password (hash in `.env`, never in YAML), a
@@ -687,7 +687,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-011 — Rebuild the supervisor page in React, same features (web app slice 2b)
-status: LIVE-TEST
+status: DONE (live-verified on the VM 2026-09-29)
 kind: SLICE (epic: IMP-004)
 for: supervisor (nothing changes for them yet) and developer (everything after this builds faster)
 source: decisions 056 (the human chose React on IMP-009)

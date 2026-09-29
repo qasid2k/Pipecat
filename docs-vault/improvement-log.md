@@ -25,3 +25,4 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-29 11:20 | DECIDED | IMP-009 | tests 201 | option C: React + Vite + TS, build committed (decisions 056); IMP-011 port proposed |
 | 2026-09-29 11:45 | BUILD | IMP-011 | tests 201→207 (+14 web) | page ported to React, build committed; smoke clean; LIVE-TEST |
 | 2026-09-29 12:00 | PROPOSE | IMP-012 | tests 207 | new design: Tailwind + sidebar/pages (decisions 057); shell + Live page first |
+| 2026-09-29 12:30 | VERIFIED | IMP-011 | tests 207 (+14 web) | live on VM: React page works, no Node on VM; tagged release/2026-09-29-IMP-011 |
