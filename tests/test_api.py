@@ -259,8 +259,9 @@ class LiveSocketTest(unittest.IsolatedAsyncioTestCase):
                 body = await r.text()
 
         self.assertIn("<title>Voice agents</title>", body)
-        # It must be self-contained: no CDN, no build step. The VM may have no
-        # outbound internet, and a dashboard needing npm is one nobody changes.
+        # Still self-contained: no CDN. The VM may have no outbound internet.
+        # (The build step is now on the laptop -- React, [[decisions]] 056 --
+        # and its output is committed, so the VM still needs no npm.)
         self.assertNotIn("http://cdn", body)
         self.assertNotIn("https://cdn", body)
         self.assertNotIn("<script src=", body)

@@ -23,3 +23,4 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-29 11:00 | VERIFIED | IMP-007 | tests 201 | live on VM: detail + filters work; tagged release/2026-09-29-IMP-007 |
 | 2026-09-29 11:05 | PROPOSE | IMP-009, IMP-010 | tests 201 | frontend decision (recommend plain) + login slice |
 | 2026-09-29 11:20 | DECIDED | IMP-009 | tests 201 | option C: React + Vite + TS, build committed (decisions 056); IMP-011 port proposed |
+| 2026-09-29 11:45 | BUILD | IMP-011 | tests 201→207 (+14 web) | page ported to React, build committed; smoke clean; LIVE-TEST |

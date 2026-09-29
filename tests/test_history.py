@@ -165,12 +165,24 @@ class HistoryEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/history", body["endpoints"])
 
 
+def web_source_and_build() -> tuple[str, str]:
+    """The page's React source and the built bundle the VM serves. Since
+    IMP-011 the page is React ([[decisions]] 056); the old api/dashboard.html
+    is gone. Behaviour is tested in web/ (`npm test`); these check the pieces
+    exist in both the source and what actually ships."""
+    repo = Path(__file__).resolve().parent.parent
+    src = "\n".join(p.read_text(encoding="utf-8") for p in sorted((repo / "web" / "src").rglob("*.ts*"))
+                    if ".test." not in p.name)
+    built = "\n".join(p.read_text(encoding="utf-8") for p in (repo / "api" / "static" / "assets").glob("*.js"))
+    return src, built
+
+
 class DashboardPageTest(unittest.TestCase):
     def test_the_page_has_the_recent_calls_table(self):
-        html = (Path(__file__).resolve().parent.parent / "api" / "dashboard.html").read_text(
-            encoding="utf-8")
-        self.assertIn("Recent calls", html)
-        self.assertIn('fetch("/history', html)
+        src, built = web_source_and_build()
+        for text in (src, built):
+            self.assertIn("Recent calls", text)
+            self.assertIn("/history?", text)
 
 
 if __name__ == "__main__":

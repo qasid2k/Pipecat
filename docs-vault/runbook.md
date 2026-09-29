@@ -561,8 +561,9 @@ ssh -L 8091:localhost:8091 root@<vm>
 # then open http://localhost:8091/ locally
 ```
 
-The page is one self-contained HTML file with no build step and no CDN, served
-from memory. Durations are counted by the browser, so **the server sends nothing
+The page is a React app ([[decisions]] 056), built on the laptop and
+**committed** as `api/static/`, so the VM serves it with no Node and no CDN.
+See "Changing the web app" below. Durations are counted by the browser, so **the server sends nothing
 at all while the service is idle** ([[decisions]] 045). "disconnected" in the
 corner means the socket dropped; it reconnects on its own.
 
@@ -585,6 +586,30 @@ caller number; "Clear" resets it. The same filters work on the API:
 > anything on the laptop that uses `localhost:8091` (a local bot, a script)
 > is talking to the **live VM**. A local bot then can't bind 8091 and says
 > "API could not start". Run local test bots on other ports.
+
+### Changing the web app (laptop only)
+
+The page's source is `web/` (React + Vite + TypeScript). The VM never builds
+it; you build on the laptop and commit the output.
+
+```bash
+cd web
+npm install            # once, and after package.json changes (reads web/.npmrc)
+npm test               # frontend tests (Vitest)
+npm run build          # type-check, build into ../api/static, stamp build-info.json
+```
+
+**Commit `api/static/` in the same commit as the `web/` change.** If you
+forget, `tests/test_web_build.py` fails with "api/static/ is out of date".
+That is the guard that stops the VM serving an old page.
+
+For live editing with hot reload: start a **silent-engine bot on 18091**
+(`python bot.py config.smoke.local.yaml`, which uses ports 18090/18091), then
+`npm run dev` in `web/` and open the URL it prints. It proxies the API to
+18091 on purpose, never 8091, which can be a port forward to the live VM.
+
+`web/.npmrc` sets `legacy-peer-deps=true`: npm 10.9 crashes resolving
+Vitest 5's optional peers. Remove it once npm is fixed.
 
 ### The control plane
 

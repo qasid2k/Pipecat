@@ -30,6 +30,7 @@ from core.pool import AgentPool
 from core.records import CallFilter, CallRecord, CallStore, NullCallStore, RecordWriter, TurnRecord
 from stores.sqlite_store import SqliteCallStore
 from tests.test_api import roster
+from tests.test_history import web_source_and_build
 
 T0 = datetime(2026, 9, 27, 9, 0, tzinfo=timezone.utc)
 
@@ -249,11 +250,12 @@ class EndpointTest(unittest.IsolatedAsyncioTestCase):
 
 class PageTest(unittest.TestCase):
     def test_the_page_has_detail_and_filters(self):
-        html = (Path(__file__).resolve().parent.parent / "api" / "dashboard.html").read_text(
-            encoding="utf-8")
-        for needle in ('id="call-detail"', 'id="f-agent"', 'id="f-outcome"', 'id="f-caller"',
-                       'id="f-since"', 'id="f-until"', 'fetch("/history/'):
-            self.assertIn(needle, html)
+        src, built = web_source_and_build()
+        for element_id in ("call-detail", "f-agent", "f-outcome", "f-caller", "f-since", "f-until"):
+            self.assertIn(f'id="{element_id}"', src)
+            self.assertIn(element_id, built)
+        for text in (src, built):
+            self.assertIn("/history/", text)
 
 
 if __name__ == "__main__":

@@ -87,3 +87,7 @@ desktop.ini
 # .obsidian/ IS committed, so vault settings stay shared.
 docs-vault/.obsidian/workspace.json
 docs-vault/.obsidian/workspace-mobile.json
+
+# Web app (decisions 056): dependencies are installed, never committed.
+# The BUILD output in api/static/ IS committed, on purpose.
+web/node_modules/

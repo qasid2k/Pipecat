@@ -6,6 +6,23 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-29 — The supervisor page is now a React app (IMP-011, web app slice 2b)
+Same screens and behaviour as before: capacity, agents, totals, audio health,
+live calls, recent calls with filters, and call detail. They are rebuilt as
+React components ([[decisions]] 056), so login, the agent view and admin
+screens can be built as components instead of growing one HTML file.
+
+* Source in `web/` (React 19, Vite 8, TypeScript 7, Vitest 5). The build in
+  `api/static/` is committed, so **the VM needs no Node**.
+* `tests/test_web_build.py` fails if `api/static/` is out of date with `web/`.
+  The fingerprint ignores line endings, so the laptop and the VM agree.
+* aiohttp serves `/` (no-cache) and `/assets/<name>` (content-hashed, cached
+  for a year; plain names only). `api/dashboard.html` is removed.
+* 14 frontend tests (Vitest + Testing Library) cover the old page's
+  behaviours; one was checked by deliberately breaking the 1.5 s refresh.
+  The three Python tests that read `dashboard.html` now check the React
+  source and the shipped bundle.
+
 ## 2026-09-29 — Supervisor page: call detail and search (IMP-007, web app slice 2)
 Click any recent call to read the **whole conversation** as a chat, caller on
 the left and agent on the right, with how it ended and where it was

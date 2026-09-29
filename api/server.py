@@ -63,6 +63,13 @@ CALL_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 # Where engine/pipecat_engine.py writes transcripts. The detail view reads ONLY
 # inside it: the path comes from a database row, and a row is not a promise.
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
+# The supervisor web app: a React build, committed to git so the VM never needs
+# Node ([[decisions]] 056). Source lives in web/; `npm run build` writes here.
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+# Vite names every asset after a hash of its content (index-DhyzqFko.js), so a
+# changed file gets a new name: safe to let browsers cache these for a year.
+ASSET_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+ASSET_CACHE = "public, max-age=31536000, immutable"
 
 
 def normalize_conversation(messages: list) -> list[dict]:
@@ -196,21 +203,25 @@ class ApiServer:
 
     # -- lifecycle ---------------------------------------------------------
     async def start(self) -> None:
-        # Read the dashboard once, into memory. Serving it from disk on every
+        # Read the page once, into memory. Serving it from disk on every
         # request would be file I/O on the call loop, for a file that never
-        # changes while the process is running.
+        # changes while the process is running. (The JS/CSS assets are served
+        # by aiohttp's FileResponse, which does its file work off the loop.)
         try:
-            self._dashboard = (Path(__file__).parent / "dashboard.html").read_text(
-                encoding="utf-8"
-            )
+            self._dashboard = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         except OSError as e:
             self._dashboard = None
-            logger.warning(f"dashboard page unavailable: {e}")
+            logger.warning(
+                f"dashboard page unavailable ({e}). The web app is built with "
+                "`npm run build` in web/, and api/static/ is committed -- is it "
+                "missing from this checkout?"
+            )
 
         app = web.Application()
         app.add_routes(
             [
                 web.get("/", self._dashboard_page),
+                web.get("/assets/{name}", self._asset),
                 web.get("/api", self._index),
                 web.get("/health", self._health),
                 web.get("/pool", self._pool_state),
@@ -347,7 +358,21 @@ class ApiServer:
     async def _dashboard_page(self, _request: web.Request) -> web.Response:
         if self._dashboard is None:
             return _json({"error": "dashboard page not available"}, status=404)
-        return web.Response(text=self._dashboard, content_type="text/html")
+        # no-cache on the page itself: it is what points at the current asset
+        # names, so a browser must always ask for the latest one.
+        return web.Response(
+            text=self._dashboard, content_type="text/html",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    async def _asset(self, request: web.Request) -> web.StreamResponse:
+        """One built JS/CSS file. Plain names only -- no paths, so a request
+        can never climb out of api/static/assets."""
+        name = request.match_info["name"]
+        path = STATIC_DIR / "assets" / name
+        if not ASSET_NAME.match(name) or name.startswith(".") or not path.is_file():
+            return _json({"error": "no such asset"}, status=404)
+        return web.FileResponse(path, headers={"Cache-Control": ASSET_CACHE})
 
     # -- handlers. Each one reads memory and returns. -----------------------
     async def _index(self, _request: web.Request) -> web.Response:

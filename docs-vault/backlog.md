@@ -294,7 +294,7 @@ slices (in order; each works on its own and gets its own live check):
      agent-side turns may not be in `turns` yet (roadmap §2, deferred from
      Stage B); if not, this slice shows the caller side plus a link to
      `conversation.json`.
-  2b. **Move to React** (IMP-011, proposed; decided in IMP-009 / decisions 056).
+  2b. **Move to React** (IMP-011, built; LIVE-TEST).
   3. **Login** (IMP-010, proposed; after IMP-011). One supervisor password (hash in `.env`, never in YAML), a
      session cookie, every page and API route behind it, plus a logout. This is
      what makes slice 4 safe; [[decisions]] 043 is exactly this gap.
@@ -685,7 +685,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-011 — Rebuild the supervisor page in React, same features (web app slice 2b)
-status: PROPOSED
+status: LIVE-TEST
 kind: SLICE (epic: IMP-004)
 for: supervisor (nothing changes for them yet) and developer (everything after this builds faster)
 source: decisions 056 (the human chose React on IMP-009)
@@ -729,6 +729,70 @@ risk / blast radius: the page only; the call path and the JSON API are
   untouched. The main risk is a missed behaviour in the port (e.g. the 1.5 s
   refresh), which the component tests list explicitly. Rollback is
   `git revert`, which brings dashboard.html back.
-commit: —
+commit: on feature/multi-agent-pool (the commit titled `IMP-011: …`)
 why rejected: —
-Review notes: —
+Review notes:
+  WHAT CHANGED
+  - web/ (new): the React app. The pieces, each a small file:
+      src/useLive.ts        connects to WS /live, reconnects after 2 s, and
+                            reports "connecting / live / disconnected". It
+                            also notices when a live call disappears.
+      src/api.ts            the two fetches (/history, /history/<id>) and
+                            the filter query.
+      src/components/       Summary (the 4 top panels + header), LiveCalls,
+                            RecentCalls (+ filter bar), CallDetail (chat).
+      src/App.tsx           wires them together; reloads recent calls
+                            1.5 s after a call ends (same as before).
+      src/styles.css        copied UNCHANGED from the old page.
+      scripts/build-info.mjs  writes the source fingerprint after a build.
+      .npmrc                a workaround for an npm 10.9 bug (see runbook).
+  - api/static/ (new, GENERATED, committed): the built page. Never edit it by
+    hand; run `npm run build`.
+  - api/server.py: serves api/static/index.html at `/` and the files in
+    api/static/assets at `/assets/<name>`. The old dashboard.html is deleted.
+  - tests/test_web_build.py (new, 6 tests): build is current, the page only
+    loads its own files, node_modules is ignored, serving, cache headers, and
+    no path escape. Three older tests that read dashboard.html now read the
+    React source AND the shipped bundle (same intent, same count).
+  - .gitignore: web/node_modules/.
+  - docs: runbook "Changing the web app", changelog. (decisions 056 already
+    covers the design.)
+  PACKAGES (all in web/package.json), and why:
+    react, react-dom                          the UI library you chose
+    vite, @vitejs/plugin-react                the build tool + its React plugin
+    typescript, @types/react, @types/react-dom  type checking (tsc --noEmit)
+    vitest, jsdom, @testing-library/react, @testing-library/dom
+                                              frontend tests in a fake browser
+  Versions are pinned by package-lock.json. npm first installed Vitest 3,
+  which carries its own older Vite and clashed with Vite 8; upgraded to
+  Vitest 5, which supports Vite 8.
+  SIZE (measured): 1,055 hand-written lines added (335 of them tests), 414
+  removed (mostly the old 396-line dashboard.html). The generated
+  files (package-lock.json, api/static/) are larger and, per decisions 056,
+  don't count. This is over the ~400 rule; porting a whole page is one
+  indivisible step, which is why it was sized L.
+  ALREADY CHECKED HERE: 207 Python tests (201 + 6) and 14 frontend tests pass.
+  Type check is clean. Mutation checks: breaking the 1.5 s refresh fails a
+  frontend test; editing a source file without rebuilding fails the staleness
+  test; Windows line endings do NOT (so the VM agrees). Smoke on isolated
+  ports 18090/18091: spike of 5 clean, `/` served with no-cache, the JS and CSS
+  served with a 1-year cache, and a path-escape attempt gave 404.
+  NOT CHECKED (needs your eyes): how it LOOKS in a real browser. No browser
+  here; the tests use a simulated one.
+  HOW TO TEST ON THE VM
+  1. `git pull` (expect the IMP-011 commit), restart bot.py. **Do not install
+     Node on the VM**: part of the test is that it isn't needed.
+  2. Open the dashboard (port 8091 forward) and hard-refresh once
+     (Ctrl+Shift+R), so the browser drops the old page.
+  3. It should look like before: dark or light to match your system,
+     capacity, agents, totals, audio health. The corner shows "live".
+  4. Call 6001: the call appears under "Calls in progress" and its duration
+     ticks. Hang up: ~2 s later it's at the top of "Recent calls".
+  5. Filters (agent, outcome, caller, dates) and Clear work; clicking a call
+     opens the chat view.
+  6. Stop bot.py for a few seconds: the corner says "disconnected", then
+     "live" again after you restart it, without reloading the page.
+  If anything looks different from before, that's a bug in the port: tell me
+  what.
+  UNDO: `git revert <the IMP-011 commit>` brings dashboard.html back; or tag
+  backup/2026-09-29-pre-IMP-011.
