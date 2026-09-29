@@ -29,6 +29,15 @@ Later it serves several companies from one deployment (SaaS).
 | **Business admin** | change agents, prompts, greeting, departments and hours **without editing YAML** | edit `config.yaml` + prompt files by hand, then restart |
 | **Developer / installer** | install, connect it to Asterisk (or another carrier), check it works, upgrade safely | many manual steps in [[runbook]] §1–4; dialplan pasted by hand; the Asterisk config lives only on the VM |
 
+## Current focus (2026-09-29): backend first
+
+The human asked to pause frontend work and make the product work better
+underneath. Until this note changes, `/improve` proposals come from backend
+work: callers not losing out (AI failure fallback, reply speed, message-taking),
+then the foundations the app will need (safe schema changes, server-side login,
+privacy/retention). The web-app plan in [[web-app-design]] stands and resumes
+after. Order agreed: IMP-008 → IMP-013 → IMP-016 → IMP-017 → IMP-018 → IMP-019.
+
 ## 3. Themes, roughly in priority order
 
 Each theme is a direction, not a task. The loop turns them into **epics**

@@ -561,7 +561,7 @@ Review notes:
   backup/2026-09-29-pre-IMP-007.
 
 ### IMP-008 — When the AI model fails, the caller hears an apology and a human, not silence
-status: PARKED (2026-09-29, by request; no second LLM yet. Note: only the optional fallback_model needs one, and the apology + transfer works with one model)
+status: APPROVED (2026-09-29, backend focus #1; WITHOUT the optional fallback_model, since there is one LLM)
 kind: FIX
 for: caller
 source: live call 2026-09-28 17:47 (Gemini `503 high demand` after 16 s of silence; the caller hung up, and no transfer happened)
@@ -804,7 +804,7 @@ Review notes:
   backup/2026-09-29-pre-IMP-011.
 
 ### IMP-012 — App shell, new design and the Live page (web app slice 2c)
-status: LIVE-TEST
+status: PARKED (2026-09-29, by request: backend first, frontend later. Code is in and served; live check still to do)
 kind: SLICE (epic: IMP-004)
 for: supervisor
 source: the human's direction ("the old dashboard was a rough starting point"); decisions 057
@@ -972,7 +972,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-014 — "Resolved by the AI", "Unclear", and a business time zone
-status: APPROVED
+status: PARKED (2026-09-29: backend focus; the outcome rule returns with the Insights work)
 kind: SLICE (epic: IMP-004; "honest numbers", part 2 of 3)
 for: supervisor, manager
 source: web-app-design v2 (definitions section)
@@ -1018,7 +1018,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-015 — Mask caller numbers by default
-status: APPROVED
+status: PARKED (2026-09-29: folded into IMP-019, privacy)
 kind: SLICE (epic: IMP-004; "honest numbers", part 3 of 3)
 for: supervisor (and anyone who can see their screen)
 source: web-app-design v2 ("private by default"); roadmap §5 privacy gap
@@ -1044,6 +1044,119 @@ live check needed (on the VM): restart, open the dashboard: numbers show as
   `+44 ••• 0123` (your SIP extension `100` stays `100`). Search Calls by part
   of a number: still found. Set it to false, restart: full numbers again.
 risk / blast radius: API only; a display change.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-016 — Measure, then cut, how long the agent takes to reply
+status: APPROVED
+kind: SLICE (backend focus #3; after IMP-013)
+for: caller
+source: Stage E laptop measurements (2.3–2.6 s reply, one 11.6 s); voice-agent research (good: under 1.5 s typical)
+size: M (the measuring part S; the fixes follow what it shows)
+why (what they can do afterwards that they can't today): today nobody knows how
+  long real callers wait for each answer on the VM. A slow agent sounds broken
+  and people talk over it or hang up. First every turn gets measured, then the
+  biggest delay gets cut.
+acceptance criteria:
+  - per turn: caller stopped speaking → text recognised → AI starts answering →
+    first agent audio out, as milliseconds, logged as one `turn:` line and
+    summarised per call (typical + slowest) into new call columns (needs
+    IMP-013's migrations).
+  - `/metrics`: reply time as a sum + count (like the greeting).
+  - Then ONE targeted fix chosen from the numbers (e.g. end-of-speech wait
+    0.6 s → lower, streaming check, model choice), each change measured
+    before/after on real calls, not guessed.
+test plan (offline): the per-turn arithmetic as a pure function; the timing
+  hook with fake frames; columns written; metric exposed.
+live check needed (on the VM): 3 calls with a few questions each, then the
+  `turn:` lines and the per-call numbers. That shows where the time goes.
+risk / blast radius: measurement only, until the chosen fix (which is its own
+  commit with its own live check).
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-017 — When nobody answers a transfer, the AI takes a message
+status: APPROVED
+kind: SLICE (backend focus #4)
+for: caller, and whoever calls them back
+source: today's "no one available" DIALSTATUS path plays a message and hangs up
+size: M
+why (what they can do afterwards that they can't today): if billing doesn't
+  pick up, the caller hears "no one's free right now; can I take a message?",
+  the agent collects name, callback number and reason, and the message is saved
+  with the call. No lost leads.
+acceptance criteria:
+  - the dialplan's no-answer path sends the caller BACK into the AI (ARI
+    continue into Stasis with a "take a message for <department>" marker)
+    instead of hanging up; the dialplan change ships as paste-ready runbook text.
+  - a `take_message` tool the LLM calls with name / number / reason; saved to a
+    new `messages` table (department, call_id, created_at, done flag).
+  - `GET /messages` (open messages, newest first) so the app can show them
+    later; each also logged.
+  - a caller who refuses or hangs up is fine: no half-saved message.
+test plan (offline): the tool handler validates and saves; the messages table
+  migration; the re-entry marker routes to message mode; `/messages`.
+live check needed (on the VM): make the billing extension not answer (or turn
+  the softphone off), call 6001, ask for billing: after the no-answer wait,
+  the agent offers to take a message; give one; `curl localhost:8091/messages`
+  shows it.
+risk / blast radius: touches the Asterisk dialplan (off-repo) and ARI
+  re-entry, the part of the system with the most live-only bugs (B-009, B-010,
+  B-012). Expect a careful live check.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-018 — Login on the server (the backend half of IMP-010)
+status: APPROVED
+kind: SLICE (backend focus #5)
+for: supervisor
+source: decisions 043 (no auth, so loopback-only); IMP-010
+size: M
+why (what they can do afterwards that they can't today): the API refuses
+  anyone without a valid session, so it can later be opened to the office
+  network. Everything in IMP-010's acceptance criteria EXCEPT the React login
+  page: a scrypt password hash in .env set by `tools/set_password.py`, an HMAC
+  cookie, POST /login + /logout (JSON), /health and /metrics open, a lockout
+  after 5 tries, off unless configured. Until the login page exists, you log
+  in with curl (documented), and the dashboard keeps working because login is
+  off by default.
+acceptance criteria / test plan: as IMP-010 (API parts), which stays for the
+  page.
+live check needed (on the VM): set the hash, restart, `curl /history` → 401;
+  curl POST /login → cookie → `curl -b` /history → 200; /health still 200.
+risk / blast radius: api/ + config only; off by default.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-019 — Privacy: keep calls only as long as needed, and mask numbers
+status: APPROVED
+kind: SLICE (backend focus #6)
+for: callers (their data), the business (legal risk)
+source: roadmap §5 (no retention or access policy); IMP-015 (masking) folded in
+size: M
+why (what they can do afterwards that they can't today): transcripts and
+  records holding callers' numbers and words are kept forever today. With this,
+  they're deleted after a configured number of days, and numbers are masked in
+  every API response by default.
+acceptance criteria:
+  - `service.retention_days` (no default guessed: the loop asks you for the
+    number before building, because it's a business/legal choice). A daily
+    cleanup deletes calls, turns, messages and recordings/ files older than
+    that, off the event loop, logging counts.
+  - IMP-015's masking, as written there.
+  - `docs-vault/security-privacy.md` (roadmap §5 #5): what's stored, where, for
+    how long, who can see it.
+test plan (offline): cleanup on a temp DB + temp recordings dir (keeps young,
+  deletes old, never touches outside recordings/); masking as IMP-015.
+live check needed (on the VM): back up calls.db, set retention to a small
+  number of days, restart: the log shows what was deleted; old calls are gone
+  from the dashboard; numbers are masked.
+risk / blast radius: deletes data by design. Hence the backup step, a dry-run
+  mode logged first, and the number chosen by you.
 commit: —
 why rejected: —
 Review notes: —
