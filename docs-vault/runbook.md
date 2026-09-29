@@ -758,6 +758,7 @@ Artifacts land in `recordings/`:
 | Agent keeps asking "are you still there?", then says goodbye | The silent-caller check-in (`engine.turn_taking.reprompt_after_s`) — the caller's speech is not reaching VAD. Same diagnosis as the row above; the call record's cause reads `caller silent`. |
 | Long silence before the greeting | Read the call's `setup:` line (`grep setup: logs/agent.jsonl`). Each step is the gap since the previous one: `connected→correlated` = matching the audio to its ARI channel, `correlated→engine_start` = picking an agent and building the engine, `vad_built` / `pipeline_built` = local setup, `pipeline_built→pipeline_started` = opening the Deepgram + Gemini connections, `pipeline_started→first_speech` = synthesising and sending the greeting. The biggest number is the one to fix. The running average is `voiceagent_time_to_greeting_seconds` on `/metrics` (sum ÷ count). |
 | Gemini 404s | [[bugs]] B-008 — use a `-latest` alias. |
+| Agent says "Sorry, I'm having trouble right now…" and transfers | The AI-model failover ([[decisions]] 058): the model errored or didn't reply within `engine.failover.timeout_s`. The log has `AI model failed (...)` with the reason; the call record's cause reads `llm failed -- ...`. Frequent occurrences mean a provider problem (check Gemini's status) or a timeout set too low. |
 
 Frame counters in the closing log line are the fastest diagnostic:
 `in` = caller frames received, `out` = frames sent (including silence),

@@ -1652,3 +1652,39 @@ phone widths. "It works" is not the same as "it's done".
 
 **Order:** the design foundation comes BEFORE login (IMP-010), so login is
 built in the new look instead of being redone.
+
+---
+
+## 058 — A failed AI model hands the caller to a human, detected by first real output
+*Date: 2026-09-29 · IMP-008*
+
+**Decision.** A per-call watchdog (`engine/failover.py`) flanks the LLM with
+two small processors. It trips on a model **error** (an ErrorFrame raised BY
+the LLM) or model **silence** (no reply within `engine.failover.timeout_s`,
+default 6 s, of the model being asked). Once per call, the engine then says a
+fixed apology and transfers to `failover.department` (default `human`), or says
+goodbye on a call that can't transfer. The call record's cause reads
+`llm failed -- <reason>`.
+
+**Why "first real output", not Pipecat's start marker.** The Gemini service
+pushes `LLMFullResponseStartFrame` BEFORE it calls Gemini, so resetting the
+clock on it would miss exactly the hang seen on 2026-09-28 (16 s of silence,
+then a 503). The clock stops on the first `LLMTextFrame` or
+`FunctionCallsStartedFrame`, which means the model actually answered.
+
+**Why only the LLM's own errors.** Errors from other processors travel
+upstream through the same spot. Counting them would transfer callers over a
+problem the apology can't fix, or over a harmless warning.
+
+**Why a fixed apology, not the LLM.** The LLM is the thing that failed.
+
+**Why the cause is "final".** The transfer ends our side of the call, which
+would otherwise overwrite the cause with "call ended -- transferred", hiding
+that the model failed. Engine-decided causes now outrank the hangup watcher.
+
+**Why no second model yet.** The backlog item allowed an optional fallback
+model; there is only one LLM account, so it is left out. Adding one later is a
+retry step before the apology.
+
+**Late replies are dropped.** If the model finally answers after the
+watchdog tripped, that text is discarded so it can't talk over the apology.

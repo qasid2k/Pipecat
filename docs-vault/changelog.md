@@ -6,6 +6,19 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-29 — When the AI model fails, the caller hears an apology and a human (IMP-008)
+Before: a model error or hang meant silence until the caller gave up (seen
+live, 16 s then a 503). Now, after `engine.failover.timeout_s` (6 s) with no
+reply, or on a model error, the agent says "Sorry, I'm having trouble right
+now. Let me put you through to someone who can help." and transfers to
+`failover.department` (human). On a call that can't transfer, it says goodbye
+instead. The cause is recorded as `llm failed -- ...` ([[decisions]] 058).
+
+* Detection waits for the model's first real output, not Pipecat's start
+  marker, which Gemini sends before calling the model.
+* Only the model's own errors count.
+* Settings in `config.yaml` under `engine.failover`; `enabled: false` turns it off.
+
 ## 2026-09-29 — The web app gets a real design: sidebar, pages, a new Live page (IMP-012)
 The old page was a rough start; this is the foundation every later screen
 builds on ([[decisions]] 057).

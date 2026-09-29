@@ -57,6 +57,7 @@ from core.config import ConfigError, EngineConfig
 from core.engine import Engine, EngineResult
 from core.records import RecordWriter
 from core.transport import CallSession
+from engine.failover import LLMWatchdog, around_llm
 from engine.session_transport import CallSessionTransport
 from engine.silence import SilenceAction, SilencePolicy
 from engine.timing import format_setup, setup_breakdown
@@ -183,6 +184,13 @@ class PipecatEngine(Engine):
         records: RecordWriter | None = None,
     ):
         self._config = config
+        # Checked here, not in core/config.py: which departments exist is this
+        # module's knowledge (they must match the dialplan's [transfer] context).
+        if config.failover.department not in TRANSFER_DEPARTMENTS:
+            raise ConfigError(
+                f"engine.failover.department: '{config.failover.department}' is not a "
+                f"transfer department. Use one of {list(TRANSFER_DEPARTMENTS)}."
+            )
         self._recordings_dir = recordings_dir
         # Where per-utterance rows go, if anywhere. Optional: an engine with no
         # writer still runs a call and still writes its transcript files, it
@@ -275,6 +283,7 @@ class PipecatEngine(Engine):
         transport: CallSessionTransport,
         recorder: TranscriptRecorder,
         vad: SileroVADAnalyzer,
+        watchdog: LLMWatchdog | None = None,
     ):
         """Assemble the STT -> LLM -> TTS pipeline from configuration.
 
@@ -307,7 +316,9 @@ class PipecatEngine(Engine):
                 stt,
                 recorder,  # sits right after STT, so it sees every transcription
                 user_aggregator,
-                llm,
+                # With a watchdog, the LLM is flanked by two taps that notice a
+                # model error or silence (engine/failover.py).
+                *(around_llm(llm, watchdog) if watchdog else [llm]),
                 tts,
                 transport.output(),
                 aggregators.assistant(),
@@ -368,7 +379,14 @@ class PipecatEngine(Engine):
         # calls arrive at the same moment.
         vad = await self._build_vad()
         marks["vad_built"] = time.monotonic()
-        pipeline, context, user_aggregator = self._build_pipeline(transport, recorder, vad)
+        # The AI-model watchdog (IMP-008). `fail_over` is defined further down,
+        # once the worker exists; the lambda looks it up when it actually fires.
+        f = self._config.failover
+        watchdog = (
+            LLMWatchdog(f.timeout_s, on_fail=lambda reason: fail_over(reason))
+            if f.enabled else None
+        )
+        pipeline, context, user_aggregator = self._build_pipeline(transport, recorder, vad, watchdog)
         marks["pipeline_built"] = time.monotonic()
         # Held in a variable rather than constructed inline: the transfer tool
         # writes the chosen department onto it, and the `finally` below reads it
@@ -397,8 +415,37 @@ class PipecatEngine(Engine):
         async def watch_for_hangup():
             """When the call ends, tear the pipeline down."""
             await session.ended.wait()
-            cause["reason"] = f"call ended -- {session.end_reason}"
+            # A cause the engine DECIDED (e.g. the model failed and we handed
+            # the caller over) outranks "the call ended", which is just its
+            # consequence: the transfer is what ends our side of the call.
+            if not cause.get("final"):
+                cause["reason"] = f"call ended -- {session.end_reason}"
             await task.cancel(reason="call ended")
+
+        handovers: set[asyncio.Task] = set()
+
+        async def fail_over(reason: str) -> None:
+            """The AI model failed this caller: say so, then hand them over."""
+            cause.update(reason=f"llm failed -- {reason}", final=True)
+            if session.can_transfer:
+                logger.warning(
+                    f"AI model failed ({reason}) -- apologising and transferring to {f.department}"
+                )
+                resources.transferred_to = f.department
+                await task.queue_frames([TTSSpeakFrame(f.apology_text)])
+
+                async def hand_over():
+                    # Same pause as the transfer tool: let the apology play first,
+                    # because leaving Stasis cuts the audio at once.
+                    await asyncio.sleep(resources.announce_secs)
+                    await session.transfer(f.department)
+
+                handover = asyncio.create_task(hand_over())
+                handovers.add(handover)
+                handover.add_done_callback(handovers.discard)
+            else:
+                logger.warning(f"AI model failed ({reason}) -- this call can't be transferred; saying goodbye")
+                await task.queue_frames([TTSSpeakFrame(f.goodbye_text), EndFrame()])
 
         # The silent-caller check-in. Pipecat's idle timer starts each time the
         # agent stops speaking and is cancelled by anyone speaking, so a spoken
@@ -438,6 +485,8 @@ class PipecatEngine(Engine):
             logger.exception(f"Call failed: {e}")
         finally:
             watcher.cancel()
+            if watchdog:
+                watchdog.stop()
             save_conversation(
                 context,
                 conversation_path,

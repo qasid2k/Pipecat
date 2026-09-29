@@ -243,6 +243,27 @@ class TurnTakingConfig:
 
 
 @dataclass(frozen=True)
+class FailoverConfig:
+    """What happens when the AI model fails mid-call (engine/failover.py).
+
+    Without this a model error or hang leaves the caller in silence: seen live
+    on 2026-09-28, 16 s of nothing and then a 503. With it, after `timeout_s`
+    without a reply (or on a model error) the agent apologises and transfers
+    to `department`, or says `goodbye_text` on a call that can't transfer.
+    """
+
+    enabled: bool = True
+    timeout_s: float = 6.0
+    department: str = "human"
+    apology_text: str = (
+        "Sorry, I'm having trouble right now. Let me put you through to someone who can help."
+    )
+    goodbye_text: str = (
+        "Sorry, I'm having trouble right now. Please call back in a few minutes. Goodbye."
+    )
+
+
+@dataclass(frozen=True)
 class PersonaConfig:
     name: str = "Alex"
     company: str = "Techbridge"
@@ -258,6 +279,7 @@ class EngineConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     turn_taking: TurnTakingConfig = field(default_factory=TurnTakingConfig)
     persona: PersonaConfig = field(default_factory=PersonaConfig)
+    failover: FailoverConfig = field(default_factory=FailoverConfig)
     idle_timeout_s: int = 30
     transfer_announce_s: float = 3.0
 
@@ -350,6 +372,30 @@ def _load_turn_taking(data: dict) -> TurnTakingConfig:
     )
 
 
+def _load_failover(data: dict) -> FailoverConfig:
+    path = "engine.failover"
+    d = _section(data, path, allowed={"enabled", "timeout_s", "department", "apology_text", "goodbye_text"})
+    defaults = FailoverConfig()
+    enabled = d.get("enabled", defaults.enabled)
+    if not isinstance(enabled, bool):
+        raise ConfigError(f"{path}.enabled: expected true or false, got {enabled!r}")
+    timeout = _number(d.get("timeout_s", defaults.timeout_s), f"{path}.timeout_s")
+    if not 2 <= timeout <= 30:
+        raise ConfigError(
+            f"{path}.timeout_s: {timeout} is out of range. Use 2-30 seconds: below 2 a "
+            "healthy but slow reply gets cut off; above 30 the caller has long gone."
+        )
+    texts = {}
+    for key in ("department", "apology_text", "goodbye_text"):
+        value = d.get(key, getattr(defaults, key))
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"{path}.{key}: expected text, got {value!r}")
+        texts[key] = value.strip()
+    # Which departments exist is the ENGINE's knowledge (they must match the
+    # dialplan), so it checks `department` when it is built, not here.
+    return FailoverConfig(enabled=enabled, timeout_s=timeout, **texts)
+
+
 def _resolve_prompt(d: dict, path: str, base_dir: Path, name: str, company: str) -> str:
     """Read a system prompt from `system_prompt` or `system_prompt_file`.
 
@@ -403,7 +449,7 @@ def _load_engine(data: dict, env: _Env, base_dir: Path) -> EngineConfig:
         "engine",
         allowed={
             "provider", "stt", "llm", "tts", "turn_taking", "persona",
-            "idle_timeout_s", "transfer_announce_s",
+            "idle_timeout_s", "transfer_announce_s", "failover",
         },
         required={"provider", "stt", "llm", "tts"},
     )
@@ -426,6 +472,7 @@ def _load_engine(data: dict, env: _Env, base_dir: Path) -> EngineConfig:
         tts=_load_tts(d["tts"], env),
         turn_taking=turn_taking,
         persona=_load_persona(d.get("persona", {}), base_dir),
+        failover=_load_failover(d.get("failover", {})),
         idle_timeout_s=idle_timeout,
         transfer_announce_s=_number(
             d.get("transfer_announce_s", defaults.transfer_announce_s),

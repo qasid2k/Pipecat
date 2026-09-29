@@ -121,6 +121,19 @@ engine:
   # transferring. Too short and the caller is cut off mid-sentence.
   transfer_announce_s: 3.0
 
+  # --- When the AI model fails mid-call ---
+  # If the model reports an error, or says nothing for timeout_s after the
+  # caller finishes speaking, the agent says apology_text and transfers to
+  # `department` (one of sales / support / billing / human). On a call that
+  # can't be transferred (extension 6000) it says goodbye_text and hangs up.
+  # Without this a model outage means silence: seen live on 2026-09-28.
+  failover:
+    enabled: true
+    timeout_s: 6
+    department: human
+    apology_text: Sorry, I'm having trouble right now. Let me put you through to someone who can help.
+    goodbye_text: Sorry, I'm having trouble right now. Please call back in a few minutes. Goodbye.
+
 # =============================================================================
 #  The agent pool: the roster of people who can answer the phone.
 #

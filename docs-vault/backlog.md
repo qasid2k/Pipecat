@@ -561,7 +561,7 @@ Review notes:
   backup/2026-09-29-pre-IMP-007.
 
 ### IMP-008 — When the AI model fails, the caller hears an apology and a human, not silence
-status: APPROVED (2026-09-29, backend focus #1; WITHOUT the optional fallback_model, since there is one LLM)
+status: LIVE-TEST
 kind: FIX
 for: caller
 source: live call 2026-09-28 17:47 (Gemini `503 high demand` after 16 s of silence; the caller hung up, and no transfer happened)
@@ -599,9 +599,58 @@ live check needed (on the VM): temporarily set `engine.llm.model` to a name
 risk / blast radius: engine only. The main risk is a false timeout on a slow
   but healthy reply: 6 s is well above the ~0.7 s normal latency measured for
   this model, and it is configurable.
-commit: —
+commit: on feature/multi-agent-pool (the commit titled `IMP-008: …`)
 why rejected: —
-Review notes: —
+Review notes:
+  WHAT CHANGED
+  - engine/failover.py (new): the watchdog. It starts a clock when the model is
+    asked for a reply, stops it on the model's first real output (text or a
+    tool call), and trips on (a) no output within timeout_s or (b) an error
+    raised BY the model. It trips once per call. Two tiny pipeline components
+    sit either side of the LLM to feed it, and the "after" one also drops
+    any late reply once it has tripped.
+  - engine/pipecat_engine.py: puts those components around the LLM, and on a
+    trip speaks the apology then transfers (after the same 3 s announce pause
+    as normal transfers), or says goodbye on a non-transferable call. Checks
+    at start-up that failover.department is a real department. The cause
+    "llm failed -- ..." is kept even though the transfer then ends the call.
+  - core/config.py + config.yaml: `engine.failover` (enabled, timeout_s 2-30,
+    department, apology_text, goodbye_text), validated like everything else.
+  - tests/test_failover.py (16): timing (fires on silence, not when answered,
+    once per call, restarts per turn, stops cleanly), taps (a request starts
+    it; only the MODEL's errors count; text or a tool call counts as an
+    answer, but Pipecat's start marker doesn't; late text is dropped), config
+    validation, and the engine refusing an unknown department.
+  - docs: decisions 058, changelog, runbook troubleshooting row.
+  WHY THIS WAY: see decisions 058. The key finding: Pipecat's "response
+  started" marker is sent BEFORE Gemini is even called, so it can't tell a
+  hang from a reply; the watchdog waits for real output instead.
+  LEFT OUT: the optional backup model (you have one LLM). It can be added
+  later as a retry before the apology.
+  ALREADY CHECKED HERE: 225 tests pass (209 + 16). Mutation check: letting any
+  component's error count makes the "only the model's errors" test fail. No
+  smoke run needed: engine only (the silent engine doesn't use it).
+  NOT CHECKED HERE: a real call. The live check below forces a real model
+  error, which is the only honest proof.
+  HOW TO TEST ON THE VM
+  1. `git pull`, restart bot.py.
+  2. Force a model error: in config.yaml set `engine.llm.model` to a name that
+     doesn't exist (e.g. `gemini-does-not-exist`) and restart. (The model is
+     only used when the caller speaks, so the greeting still plays.)
+  3. Call 6001, hear the greeting, ask anything. Within a few seconds you
+     should hear "Sorry, I'm having trouble right now. Let me put you through
+     to someone who can help." and then the human line (102) rings.
+     Log: `AI model failed (model error: ...) -- apologising and transferring
+     to human`. Dashboard → Calls → that call: "How it ended" reads
+     `llm failed -- model error: ...`, and "Transferred to" says human.
+  4. Call 6000 (direct, can't transfer) and ask something: you hear the
+     goodbye line and the call ends.
+  5. **Put the real model name back** and restart. Make a normal call: no
+     change in behaviour.
+  (The timeout path, a model that hangs, can't be forced on demand; it uses
+  the same hand-over code as step 3.)
+  UNDO: `engine.failover.enabled: false` (no code change), or
+  `git revert <the IMP-008 commit>`, or tag backup/2026-09-29-pre-IMP-008.
 
 ### IMP-009 — Decide: keep the web app as plain HTML, or adopt a frontend framework
 status: DONE (decided 2026-09-29: option C, React + Vite + TypeScript; see decisions 056)
