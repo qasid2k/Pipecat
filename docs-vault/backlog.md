@@ -285,10 +285,10 @@ acceptance criteria (for the epic as a whole): a supervisor opens a URL on the
   and filters past calls, opens one to read its transcript and outcome, and
   signs out, with no terminal and no SSH.
 slices (in order; each works on its own and gets its own live check):
-  1. **Call history, read-only** (IMP-005, built; LIVE-TEST). A "Recent calls" list on the
+  1. **Call history, read-only** (IMP-005, DONE 2026-09-29). A "Recent calls" list on the
      existing page: time, caller, agent, duration, how it ended, transferred to.
      Needs the store's first READ path (below). Loopback only, like today.
-  2. **Call detail + search.** Click a call: its transcript from the `turns`
+  2. **Call detail + search** (IMP-007, proposed). Click a call: its transcript from the `turns`
      table, cause, timings (IMP-002's `setup:` total, if stored), a filter by
      date / agent / outcome / caller number. Known gap to confirm first:
      agent-side turns may not be in `turns` yet (roadmap §2, deferred from
@@ -317,7 +317,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-005 — Recent-calls list in the supervisor page (slice 1 of IMP-004)
-status: LIVE-TEST
+status: DONE (live-verified on the VM 2026-09-29)
 kind: SLICE (epic: IMP-004)
 for: supervisor
 source: product theme 1
@@ -441,6 +441,95 @@ live check needed (on the VM): run it on the working VM: all PASS. Then break
   one thing at a time (stop Asterisk, rename an env var, start a second
   bot.py): each gives the right FAIL and fix line.
 risk / blast radius: a new tool only; nothing in the call path changes.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-007 — Call detail and search in the supervisor page (slice 2 of IMP-004)
+status: PROPOSED
+kind: SLICE (epic: IMP-004)
+for: supervisor
+source: product theme 1
+size: M
+why (what they can do afterwards that they can't today): click any recent call
+  and read the whole conversation (what the caller said AND what the agent
+  answered), with how it ended, the transfer, and how long the caller waited
+  before the greeting; and narrow the list by date, agent, outcome or caller
+  number. Today the only way to read a transcript is to SSH in and open a JSON
+  file by hand.
+acceptance criteria:
+  - `GET /calls/<call_id>` returns the call row plus its transcript. **Where the
+    transcript comes from:** the `turns` table holds only the CALLER side
+    (engine/transcripts.py writes speaker="caller" only; agent turns were
+    deferred in Stage B). The full two-sided conversation is in the call's
+    `conversation.json`, whose path is already on the row. So: read that file,
+    in a thread (no file I/O on the loop, decisions 054), and only if its
+    resolved path is inside the recordings directory, never an arbitrary path
+    from the database. Fall back to the caller-only `turns` rows if the file is
+    gone.
+  - `GET /history` gains optional filters: `since`/`until` (dates), `persona`,
+    `outcome` (transferred / not), `caller` (substring). All are parameterised
+    SQL (no string-built queries), and all still respect the 200-row cap.
+  - The page: clicking a row opens a detail panel (conversation as a chat,
+    caller left and agent right, plus cause, transfer and setup time). Above
+    the table: date, agent and outcome pickers and a caller search box. Still
+    one HTML file, no framework.
+  - Unknown call id: 404. A malformed id: 400.
+test plan (offline): store tests for each filter against a temp DB; detail
+  tests for full transcript from conversation.json, fallback to turns, missing
+  file, and a path outside recordings/ refused; a test that the file read
+  happens off the loop; API tests (404/400, filters passed through); a page
+  test that the detail panel and filter controls exist.
+live check needed (on the VM): make 2 calls (one transfer). Click each: both
+  sides of the conversation appear in order and the transfer shows. Filter by
+  agent and then by "transferred": the list narrows correctly. Search by part
+  of your extension number.
+risk / blast radius: `api/`, `core/records.py`, `stores/`, dashboard. The only
+  new risk is the file read, which is bounded to the recordings directory and
+  run in a thread. Loopback-only, no new exposure.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-008 — When the AI model fails, the caller hears an apology and a human, not silence
+status: PROPOSED
+kind: FIX
+for: caller
+source: live call 2026-09-28 17:47 (Gemini `503 high demand` after 16 s of silence; the caller hung up, and no transfer happened)
+size: M
+why (what they can do afterwards that they can't today): on 2026-09-28 a
+  caller asked for billing, Gemini hung for 16 s and then returned 503, and the
+  caller heard nothing at all until they gave up. The engine has no handling
+  for an LLM error: Pipecat logs it as non-fatal and the call just goes quiet.
+  With this, the caller hears "Sorry, I'm having trouble right now. Let me put
+  you through to someone who can help", and is transferred to `human`, so the
+  call still ends somewhere useful.
+acceptance criteria:
+  - `engine.llm.timeout_s` (default ~6 s): if the model has not started
+    replying within that time after the caller finished speaking, treat it as a
+    failure. (Pipecat has no such limit by itself; the call above waited 16 s.)
+  - On an LLM error or timeout: speak a configurable apology line (config, not
+    code), then transfer to the fallback department (`human` by default,
+    configurable). On a direct 6000 call, where transfer is impossible, say
+    goodbye and end the call instead. It happens at most once per call, and the
+    record's cause says `llm failed: <short reason>`.
+  - Optional `engine.llm.fallback_model`: retry once on a second model before
+    apologising, e.g. `gemini-3.1-flash-lite` (measured ~650 ms). Off by
+    default. Worth having because the 503 was "high demand" on one model.
+  - No change when the model works.
+test plan (offline): the decide-what-to-do logic (error or timeout → retry
+  fallback model? → apologise + transfer, or goodbye if transfer is
+  unavailable) as a small Pipecat-free class, like engine/silence.py, fully
+  unit-tested. Config tests. Wiring tested by checking the engine registers the
+  error handler and the timeout.
+live check needed (on the VM): temporarily set `engine.llm.model` to a name
+  that doesn't exist (instant error), call 6001 and ask something: you should
+  hear the apology, then the transfer rings the human line, and the dashboard
+  cause reads `llm failed`. Put the model back. The timeout path can only be
+  seen during a real provider slowdown; say so rather than claim it.
+risk / blast radius: engine only. The main risk is a false timeout on a slow
+  but healthy reply: 6 s is well above the ~0.7 s normal latency measured for
+  this model, and it is configurable.
 commit: —
 why rejected: —
 Review notes: —

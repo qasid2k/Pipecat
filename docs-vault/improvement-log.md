@@ -16,3 +16,5 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-28 18:10 | PROPOSE | IMP-004..006 | tests 168→168 | web-app epic + call-history slice, setup doctor; IMP-002 still LIVE-TEST |
 | 2026-09-28 18:20 | PARK | IMP-002, IMP-003 | tests 168 | parked by request; IMP-004 epic + IMP-005 approved |
 | 2026-09-28 18:45 | BUILD | IMP-005 | tests 168→182 | recent-calls list + /history built, smoke clean; LIVE-TEST |
+| 2026-09-29 09:00 | VERIFIED | IMP-005 | tests 182 | live on VM: recent calls work; tagged release/2026-09-29-IMP-005 |
+| 2026-09-29 09:05 | PROPOSE | IMP-007, IMP-008 | tests 182 | web app slice 2 (detail+search); LLM-failure apology + transfer |
