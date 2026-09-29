@@ -86,6 +86,7 @@ def _call_record(
         transferred_to=result.transferred_to if result else None,
         transcript_path=result.transcript_path if result else "",
         conversation_path=result.conversation_path if result else "",
+        time_to_greeting_s=result.time_to_greeting_s if result else None,
         **io_stats,
     )
 

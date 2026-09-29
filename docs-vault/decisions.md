@@ -1688,3 +1688,35 @@ retry step before the apology.
 
 **Late replies are dropped.** If the model finally answers after the
 watchdog tripped, that text is discarded so it can't talk over the apology.
+
+---
+
+## 059 — The call database grows by additive migrations only
+*Date: 2026-09-29 · IMP-013*
+
+**Decision.** `stores/sqlite_store.py` keeps a list, `ADDED_CALL_COLUMNS`, of
+every column added after databases existed in the field. On start it compares
+it with `PRAGMA table_info(calls)` and runs `ALTER TABLE calls ADD COLUMN` for
+anything missing, logging each one. That is the whole migration system.
+
+**Rules that keep a live database safe:** only ever ADD, never drop, rename or
+retype; new columns are nullable with no default, so rows written before the
+column existed read as NULL ("not recorded"), never as an invented 0 or
+false; anything added to the calls table in SCHEMA is also appended to the list.
+Starting twice changes nothing.
+
+**Why not a migration framework** (Alembic etc.): one SQLite file, one writer,
+additive changes only. A numbered-script system solves problems this project
+doesn't have yet, and adds a dependency. Reopen when a change needs to rewrite
+data or remove a column, or when Postgres arrives ([[decisions]] 040).
+
+**Verified on real data**, not just a test fixture: a copy of the populated
+load-test database (60 old-schema rows) migrated with every row intact and
+`integrity_check` ok. Lesson recorded for backups: the database runs in WAL
+mode, so copying `calls.db` alone can miss recent data sitting in
+`calls.db-wal`. Back up with SQLite's own backup API ([[runbook]]).
+
+**First columns:** `agent_speaking_at_end` (was real agent speech going out in
+the last 0.3 s before the call ended; the sign of a caller giving up
+mid-answer) and `time_to_greeting_s` (IMP-002's measurement, previously only
+logged).

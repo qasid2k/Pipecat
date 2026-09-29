@@ -43,6 +43,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Sequence
 
+from loguru import logger
+
 from core.records import CallFilter, CallRecord, CallStore, TurnRecord
 
 SCHEMA = """
@@ -68,7 +70,9 @@ CREATE TABLE IF NOT EXISTS calls (
     pacer_slips       INTEGER NOT NULL DEFAULT 0,
     transcript_path   TEXT,
     conversation_path TEXT,
-    node_id           TEXT
+    node_id           TEXT,
+    agent_speaking_at_end INTEGER,
+    time_to_greeting_s    REAL
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -100,6 +104,19 @@ _CALL_COLUMNS = [
     "frames_in", "frames_out", "frames_out_real", "frames_dropped",
     "pacer_slips",
     "transcript_path", "conversation_path", "node_id",
+    "agent_speaking_at_end", "time_to_greeting_s",
+]
+
+# Columns added AFTER databases already existed in the field, oldest first.
+# `CREATE TABLE IF NOT EXISTS` never touches an existing table, so each of these
+# is also ALTERed onto an older calls.db at start-up (see _migrate). The rules,
+# which keep a live database safe: only ever ADD, never drop or rename; the type
+# has no NOT NULL and no default other than NULL, so old rows read as "not
+# recorded" rather than inventing a value; and anything added to SCHEMA's calls
+# table must also be appended here.
+ADDED_CALL_COLUMNS: list[tuple[str, str]] = [
+    ("agent_speaking_at_end", "INTEGER"),  # IMP-013
+    ("time_to_greeting_s", "REAL"),        # IMP-013
 ]
 
 
@@ -112,6 +129,9 @@ class SqliteCallStore(CallStore):
     def __init__(self, path: str | Path):
         self._path = Path(path)
         self._conn: sqlite3.Connection | None = None
+        # Columns this start-up had to add to an older database (for tests and
+        # the start-up log). Empty on a fresh or already-current database.
+        self.migrated: list[str] = []
 
     @property
     def describe(self) -> str:
@@ -135,6 +155,26 @@ class SqliteCallStore(CallStore):
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(SCHEMA)
         self._conn.commit()
+        self.migrated = self._migrate(self._conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> list[str]:
+        """Add any ADDED_CALL_COLUMNS an older calls table is missing.
+
+        Idempotent: it compares against what is actually there, so starting
+        twice adds nothing the second time. Additive only, so existing rows are
+        never rewritten. SQLite's ALTER TABLE ADD COLUMN is a quick metadata
+        change, not a copy of the table.
+        """
+        present = {row[1] for row in conn.execute("PRAGMA table_info(calls)")}
+        added = []
+        for name, decl in ADDED_CALL_COLUMNS:
+            if name not in present:
+                conn.execute(f"ALTER TABLE calls ADD COLUMN {name} {decl}")
+                logger.info(f"Records: added column calls.{name} ({decl}) to an older database")
+                added.append(name)
+        conn.commit()
+        return added
 
     async def save_call(self, record: CallRecord) -> None:
         await asyncio.to_thread(self._save_call, record)

@@ -88,6 +88,11 @@ class CallRecord:
     transcript_path: str = ""
     conversation_path: str = ""
     node_id: str = NODE_ID
+    # Added by IMP-013. None = not recorded (every call before it), never "no".
+    # Was the agent mid-sentence when the call ended? (transport)
+    agent_speaking_at_end: bool | None = None
+    # Seconds from the audio connection to the first word of the greeting. (engine)
+    time_to_greeting_s: float | None = None
 
 
 @dataclass(frozen=True)

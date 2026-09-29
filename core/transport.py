@@ -122,11 +122,12 @@ class CallSession(ABC):
         """
         return {}
 
-    def io_counters(self) -> dict[str, int]:
+    def io_counters(self) -> dict[str, int | bool | None]:
         """Audio frame counters for this call, for the call record.
 
         Keys, when present, match `CallRecord`'s columns: `frames_in`,
-        `frames_out`, `frames_out_real`, `frames_dropped`, `pacer_slips`. The
+        `frames_out`, `frames_out_real`, `frames_dropped`, `pacer_slips`,
+        `agent_speaking_at_end` (True/False, None if unknown). The
         last two are the overload signals — non-zero means this caller was
         served worse than they should have been, and they are what a capacity
         ceiling gets measured against.

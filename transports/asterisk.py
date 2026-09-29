@@ -72,6 +72,12 @@ from transports.audiosocket import RECV_BUFFER_BYTES, AudioSocketConnection
 UUID_CORRELATION_TIMEOUT_S = 2.0
 
 
+# Real audio within this long before the end counts as "still speaking". Frames
+# are 20 ms apiece, so this is ~15 frames: long enough to span the gap between
+# two words, short enough that a finished sentence plus a pause doesn't count.
+SPEAKING_AT_END_S = 0.3
+
+
 class AsteriskCallSession(CallSession):
     """One Asterisk call: an AudioSocket audio path, plus ARI for control.
 
@@ -251,7 +257,23 @@ class AsteriskCallSession(CallSession):
             "frames_out_real": self._io.frames_out_real,
             "frames_dropped": self._io.frames_dropped,
             "pacer_slips": self._io.pacer_slips,
+            "agent_speaking_at_end": self._agent_speaking_at_end(),
         }
+
+    def _agent_speaking_at_end(self) -> bool | None:
+        """Was real agent speech still going out when the call ended?
+
+        None while the call is still up (unknown, not "no"). An agent that
+        never spoke was not speaking. Otherwise: real audio within
+        SPEAKING_AT_END_S of the end. A caller who hangs up while the agent is
+        talking is one of the signs of a call the AI did NOT resolve.
+        """
+        io = self._io
+        if io.ended_at is None:
+            return None
+        if io.last_real_out_at is None:
+            return False
+        return io.ended_at - io.last_real_out_at <= SPEAKING_AT_END_S
 
     def setup_marks(self) -> dict[str, float]:
         marks = {"connected": self._io.connected_at, "correlated": self._created_at}

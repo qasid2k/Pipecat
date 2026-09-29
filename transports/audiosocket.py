@@ -140,6 +140,11 @@ class AudioSocketConnection:
         # what the caller hears as dead air before the greeting.
         self.connected_at = time.monotonic()
         self.first_real_out_at: float | None = None
+        # The LAST real frame and the moment the call ended: together they say
+        # whether the agent was mid-sentence when the line went dead, which is
+        # how a caller giving up on the agent shows up in the records (IMP-013).
+        self.last_real_out_at: float | None = None
+        self.ended_at: float | None = None
         self.frames_out = 0
         self.frames_out_real = 0
         # Set by the write thread every time it takes a frame off _outgoing, so
@@ -224,6 +229,8 @@ class AudioSocketConnection:
         that waiter asleep strands the call and leaks its persona ([[bugs]]
         B-014).
         """
+        if self.ended_at is None:
+            self.ended_at = time.monotonic()  # the FIRST end is the one that counts
         if not self.hangup_event.is_set():
             self.end_reason = reason
             self._loop.call_soon_threadsafe(self.hangup_event.set)
@@ -323,8 +330,9 @@ class AudioSocketConnection:
                 heartbeat_frames += 1
                 if is_real:
                     self.frames_out_real += 1
+                    self.last_real_out_at = time.monotonic()
                     if self.first_real_out_at is None:
-                        self.first_real_out_at = time.monotonic()
+                        self.first_real_out_at = self.last_real_out_at
 
                 now = time.monotonic()
                 if now - last_heartbeat >= 5.0:

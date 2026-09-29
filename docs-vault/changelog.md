@@ -6,6 +6,19 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-29 — The call database can grow, and records two new facts (IMP-013)
+Until now a new column could never reach an existing `calls.db`:
+`CREATE TABLE IF NOT EXISTS` leaves an existing table alone. The store now adds
+missing columns on start, additively only ([[decisions]] 059), and logs
+`Records: added column calls.<name>` once.
+
+* New per call: **agent_speaking_at_end** (the agent was mid-sentence when the
+  line went dead: a sign the caller gave up) and **time_to_greeting_s**.
+  Older calls read as NULL, never as "no".
+* Tested against a copy of a real 60-row old database: every row intact.
+* Back up with SQLite's backup API, not a file copy (WAL mode keeps recent data
+  in a side file); command in [[runbook]].
+
 ## 2026-09-29 — When the AI model fails, the caller hears an apology and a human (IMP-008)
 Before: a model error or hang meant silence until the caller gave up (seen
 live, 16 s then a 503). Now, after `engine.failover.timeout_s` (6 s) with no

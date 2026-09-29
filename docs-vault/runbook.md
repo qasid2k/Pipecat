@@ -710,6 +710,21 @@ passed, and **the last clean level is the answer**, not the level that broke.
 > so it never constructs a VAD: a spike here is **easier** than a real one
 > ([[decisions]] 047). Quote it with both caveats or not at all.
 
+### Backing up the call database
+
+The database runs in WAL mode: recent writes sit in `calls.db-wal` until they
+are folded into `calls.db`. Copying `calls.db` alone can silently miss them.
+Use SQLite's own backup, which is safe even while the bot is running:
+
+```bash
+python -c "import sqlite3; s=sqlite3.connect('records/calls.db'); d=sqlite3.connect('records/calls-backup.db'); s.backup(d); d.close(); print('backed up')"
+```
+
+**Schema changes are automatic and additive** ([[decisions]] 059): after a
+`git pull` that adds a column, the first start logs
+`Records: added column calls.<name> ...` once. Nothing is ever dropped or
+rewritten. Take a backup before pulling one anyway.
+
 ### Checking the record store without a phone
 
 ```bash

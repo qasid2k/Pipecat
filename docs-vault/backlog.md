@@ -978,7 +978,7 @@ Review notes:
   backup/2026-09-29-pre-IMP-012.
 
 ### IMP-013 — Let the call database grow: add columns safely, and record two new facts per call
-status: IN-PROGRESS
+status: LIVE-TEST
 kind: SLICE (epic: IMP-004; step 1 of [[web-app-design]] "honest numbers", part 1 of 3)
 for: supervisor (indirectly: the facts the next slices need), developer
 source: web-app-design v2; IMP-002 noted the store has no migrations
@@ -1018,9 +1018,53 @@ live check needed (on the VM): `git pull`, restart: the log shows
 risk / blast radius: touches the live database on start-up. Mitigated by
   additive-only changes, a test on an old-schema copy, and a backup step in the
   live check (copy calls.db first).
-commit: —
+commit: on feature/multi-agent-pool (the commit titled `IMP-013: …`)
 why rejected: —
-Review notes: —
+Review notes:
+  WHAT CHANGED
+  - stores/sqlite_store.py: `ADDED_CALL_COLUMNS` (the list of columns added
+    after databases existed) and `_migrate()`: on start it looks at which
+    columns the table actually has and ADDs the missing ones, logging each.
+    Nothing is ever dropped or rewritten. Starting twice does nothing.
+    The two new columns are also in the table layout for brand-new databases.
+  - transports/audiosocket.py: the audio connection now also stamps the LAST
+    moment real agent speech went out, and the moment the call ended.
+  - transports/asterisk.py: turns those into `agent_speaking_at_end`: True if
+    real speech went out in the last 0.3 s before the end, False if the agent
+    was quiet (or never spoke), None while the call is still up.
+  - core/records.py + bot.py: the call record carries `agent_speaking_at_end`
+    and `time_to_greeting_s` (IMP-002's number, until now only in the log).
+  - tests/test_migrations.py (12): an old-layout database (built exactly like
+    the VM's) gains the columns and keeps its rows; old rows read NULL, not 0;
+    a second start adds nothing; a fresh database needs nothing; a migrated
+    database accepts new records; the speaking-at-end rule in all four cases;
+    the end is stamped once; the record carries both facts.
+  - docs: decisions 059, changelog, runbook "Backing up the call database".
+  CHECKED ON REAL DATA: a copy of the laptop's populated load-test database
+  (60 old-layout rows) upgraded with every row kept, the oldest row unchanged,
+  and `integrity_check` ok. Mutation check: switching the column-adding off
+  fails 3 tests. Smoke on 18090/18091: spike of 5 clean; start-up logged both
+  "added column" lines; the new calls were saved with the new fact filled in.
+  237 tests pass (225 + 12).
+  FOUND ON THE WAY: copying calls.db to back it up can miss recent data (WAL
+  mode keeps it in calls.db-wal). The live check uses SQLite's backup instead.
+  HOW TO TEST ON THE VM
+  1. **Back up first**, from the repo folder:
+       python -c "import sqlite3; s=sqlite3.connect('records/calls.db'); d=sqlite3.connect('records/calls-backup.db'); s.backup(d); d.close(); print('backed up')"
+  2. `git pull`, restart bot.py. The start-up log shows, once:
+       Records: added column calls.agent_speaking_at_end (INTEGER) ...
+       Records: added column calls.time_to_greeting_s (REAL) ...
+     Restart again: those lines do NOT appear.
+  3. Open the dashboard → Calls: all your old calls are still there.
+  4. Make 2 calls: in one, hang up WHILE the agent is talking; in the other,
+     wait for the agent to finish, pause, then hang up. Then:
+       python -c "import sqlite3; c=sqlite3.connect('records/calls.db'); print(c.execute('select caller_id, agent_speaking_at_end, time_to_greeting_s from calls order by started_at desc limit 2').fetchall())"
+     Expect (newest first) something like `[('100', 0, 1.8), ('100', 1, 1.7)]`:
+     0 for the pause-then-hang-up, 1 for hanging up mid-sentence, and a
+     greeting time on both.
+  UNDO: the new columns are harmless if left (nothing reads them yet), so
+  `git revert <the IMP-013 commit>` is enough; or restore
+  records/calls-backup.db; or tag backup/2026-09-29-pre-IMP-013.
 
 ### IMP-014 — "Resolved by the AI", "Unclear", and a business time zone
 status: PARKED (2026-09-29: backend focus; the outcome rule returns with the Insights work)
