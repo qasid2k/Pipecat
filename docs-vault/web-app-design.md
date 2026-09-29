@@ -3,7 +3,8 @@
 **The information design for the web app**: which page holds what, and why.
 The improvement loop builds web-app slices against this note. Visual mockup
 (clickable, with notes per block):
-https://claude.ai/artifact/XV6tzgYG2tRZMqroNqLD25 (private; open it while signed in).
+https://claude.ai/artifact/XV6tzgYG2tRZMqroNqLD25 (private; open it while signed in), or
+open the same page offline: `docs-vault/mockups/supervisor-blueprint.html`.
 
 Related: [[product]] (theme 1), [[decisions]] 056 (React), 057 (Tailwind,
 sidebar), [[backlog]] IMP-004.

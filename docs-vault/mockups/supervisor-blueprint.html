@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supervisor App Blueprint</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f1f3f6; --border: #e2e5ea;
+    --text: #111827; --muted: #5b6474;
+    --brand: #1d4ed8; --brand-soft: #e8efff; --on-brand: #ffffff;
+    --ok: #15803d; --ok-soft: #dcfce7; --busy: #a1520a; --busy-soft: #fef3c7;
+    --bad: #b91c1c; --bad-soft: #fee2e2;
+    --note: #6d28d9; --note-soft: #f1ebff;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0d1016; --surface: #151a22; --surface-2: #1c222c; --border: #283040;
+      --text: #e6e9ef; --muted: #9aa4b5;
+      --brand: #6ea8ff; --brand-soft: #1a2944; --on-brand: #0d1016;
+      --ok: #4ade80; --ok-soft: #14301f; --busy: #fbbf24; --busy-soft: #3a2e10;
+      --bad: #f87171; --bad-soft: #3b1a1d; --note: #c4a8ff; --note-soft: #2a2140;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0d1016; --surface: #151a22; --surface-2: #1c222c; --border: #283040;
+    --text: #e6e9ef; --muted: #9aa4b5;
+    --brand: #6ea8ff; --brand-soft: #1a2944; --on-brand: #0d1016;
+    --ok: #4ade80; --ok-soft: #14301f; --busy: #fbbf24; --busy-soft: #3a2e10;
+    --bad: #f87171; --bad-soft: #3b1a1d; --note: #c4a8ff; --note-soft: #2a2140;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); }
+  .wrap { max-width: 1320px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 48px; }
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+  .num { font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--mono); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :where(button, a, [tabindex]):focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
+
+  /* ---------- page intro ---------- */
+  .intro { display: grid; gap: 14px; max-width: 72ch; margin-bottom: 22px; }
+  .intro h1 { font-size: 26px; letter-spacing: -0.02em; }
+  .intro p { margin: 0; color: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .s-ready { background: var(--ok-soft); color: var(--ok); }
+  .s-query { background: var(--brand-soft); color: var(--brand); }
+  .s-new { background: var(--busy-soft); color: var(--busy); }
+  .s-later { background: var(--surface-2); color: var(--muted); }
+
+  /* ---------- layout: mock + notes ---------- */
+  .stage { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 1100px) { .stage { grid-template-columns: minmax(0, 1fr) 360px; } }
+
+  /* ---------- the app mock ---------- */
+  .app { display: grid; grid-template-columns: 190px minmax(0, 1fr); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--bg); min-height: 640px; }
+  @media (max-width: 720px) { .app { grid-template-columns: minmax(0, 1fr); } .side { flex-direction: row !important; flex-wrap: wrap; align-items: center; } .side .brandbox { flex-basis: 100%; } .side .status { display: none; } }
+  .side { background: var(--surface); border-right: 1px solid var(--border); padding: 16px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .brandbox { padding: 2px 8px 14px; }
+  .brandbox b { display: block; font-size: 15px; letter-spacing: -0.01em; }
+  .brandbox span { font-size: 12px; color: var(--muted); }
+  .nav { display: flex; align-items: center; gap: 10px; border: 0; background: none; text-align: left; padding: 8px 10px; border-radius: 8px; color: var(--muted); font-weight: 500; }
+  .nav:hover { background: var(--surface-2); color: var(--text); }
+  .nav[aria-current="page"] { background: var(--brand-soft); color: var(--brand); }
+  .nav svg { width: 17px; height: 17px; flex: none; }
+  .nav .soon { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .side .status { margin-top: auto; font-size: 12px; color: var(--muted); padding: 8px 10px; display: grid; gap: 2px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .main { padding: 22px; min-width: 0; }
+  .ph { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 10px; margin-bottom: 16px; }
+  .ph h2 { font-size: 21px; letter-spacing: -0.02em; }
+  .ph p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .seg span { padding: 4px 10px; font-size: 12.5px; color: var(--muted); }
+  .seg span.on { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; min-width: 0; }
+  .card h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+  .grid { display: grid; gap: 12px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .kpi small { display: block; color: var(--muted); font-size: 12px; font-weight: 500; }
+  .kpi b { display: block; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; margin-top: 2px; }
+  .kpi em { font-style: normal; font-size: 12px; color: var(--muted); }
+  .kpi.warn { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
+  .kpi.warn b { color: var(--bad); }
+  .up { color: var(--ok); font-weight: 600; } .down { color: var(--bad); font-weight: 600; }
+
+  .alert { display: flex; gap: 10px; align-items: flex-start; border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent); background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .alert b { color: inherit; }
+  .alert .act { margin-left: auto; white-space: nowrap; font-weight: 600; text-decoration: underline; }
+
+  .agents { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .ag { border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+  .ag.busy { background: var(--busy-soft); border-color: color-mix(in srgb, var(--busy) 45%, transparent); }
+  .ag .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 1px 8px; font-size: 11.5px; font-weight: 600; }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .p-free { background: var(--ok-soft); color: var(--ok); }
+  .p-busy { background: color-mix(in srgb, var(--busy) 16%, var(--surface)); color: var(--busy); }
+  .ag .row { display: flex; justify-content: space-between; font-size: 13px; }
+  .ag .quote { font-size: 12.5px; color: var(--muted); border-left: 2px solid color-mix(in srgb, var(--busy) 50%, transparent); padding-left: 8px; }
+  .ag .dur { font-family: var(--mono); font-size: 17px; font-weight: 650; }
+
+  .two { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  @media (max-width: 900px) { .two { grid-template-columns: minmax(0, 1fr); } }
+  .feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; font-size: 13px; }
+  .feed li { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 8px; }
+  .feed time { color: var(--muted); font-family: var(--mono); font-size: 12px; padding-top: 1px; }
+
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 600; padding: 0 10px 7px 0; white-space: nowrap; }
+  td { border-top: 1px solid var(--border); padding: 8px 10px 8px 0; vertical-align: top; }
+  tr.sel td { background: var(--brand-soft); }
+  .oc { display: inline-flex; border-radius: 6px; padding: 1px 7px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .oc-ai { background: var(--ok-soft); color: var(--ok); }
+  .oc-hu { background: var(--brand-soft); color: var(--brand); }
+  .oc-bad { background: var(--bad-soft); color: var(--bad); }
+  .oc-q { background: var(--surface-2); color: var(--muted); }
+  .said { color: var(--muted); max-width: 26ch; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .fchip { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; color: var(--muted); }
+  .fchip.on { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); font-weight: 600; }
+  .search { display: flex; gap: 8px; margin-bottom: 10px; }
+  .search div { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; color: var(--muted); background: var(--surface); font-size: 13px; }
+
+  .chat { display: flex; flex-direction: column; gap: 7px; }
+  .msg { max-width: 85%; border-radius: 14px; padding: 7px 11px; font-size: 13px; }
+  .msg small { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
+  .msg.a { align-self: flex-end; background: var(--brand-soft); border-bottom-right-radius: 4px; }
+  .msg.c { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .sys { align-self: center; font-size: 11.5px; color: var(--muted); border: 1px dashed var(--border); border-radius: 999px; padding: 2px 10px; }
+  dl.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px 12px; margin: 0 0 12px; font-size: 13px; }
+  dl.facts dt { font-size: 11.5px; color: var(--muted); }
+  dl.facts dd { margin: 0; }
+  .timing { display: flex; height: 10px; border-radius: 999px; overflow: hidden; margin: 6px 0 4px; }
+  .timing span { display: block; height: 100%; }
+  .tlegend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--muted); }
+  .tlegend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
+
+  .bars text { fill: var(--muted); font-size: 10px; font-family: var(--sans); }
+  .hbar { display: grid; grid-template-columns: 84px minmax(0, 1fr) 30px; gap: 8px; align-items: center; font-size: 12.5px; margin-bottom: 6px; }
+  .hbar .track { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .hbar .fill { height: 100%; border-radius: 999px; }
+  .later-page { display: grid; gap: 10px; }
+  .later-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; border: 1px dashed var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+  .later-row span { color: var(--muted); font-size: 12.5px; }
+
+  /* letter markers tying mock blocks to the notes */
+  .mk { position: relative; }
+  .mk::after { content: attr(data-mk); position: absolute; top: -8px; left: -8px; width: 20px; height: 20px; border-radius: 50%; background: var(--note); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--bg); z-index: 2; }
+  :root[data-theme="dark"] .mk::after { color: #1a1030; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mk::after { color: #1a1030; } }
+  .hide-mk .mk::after { display: none; }
+
+  /* ---------- notes ---------- */
+  .notes { display: grid; gap: 12px; align-content: start; }
+  .notes .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .notes .head h2 { font-size: 16px; }
+  .toggle { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 4px 10px; font-size: 12.5px; }
+  .purpose { background: var(--note-soft); border-radius: 12px; padding: 12px 14px; font-size: 13.5px; }
+  .purpose b { color: var(--note); }
+  .note { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+  .note .l { width: 22px; height: 22px; border-radius: 50%; background: var(--note); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+  :root[data-theme="dark"] .note .l { color: #1a1030; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .note .l { color: #1a1030; } }
+  .note h3 { font-size: 13.5px; margin-bottom: 3px; }
+  .note p { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+
+  /* ---------- build order ---------- */
+  .order { margin-top: 30px; display: grid; gap: 12px; }
+  .order h2 { font-size: 18px; }
+  .order > p { margin: 0; color: var(--muted); max-width: 75ch; }
+  .steps { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  .step { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: grid; gap: 4px; align-content: start; }
+  .step small { color: var(--muted); font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+  .step b { font-size: 14px; }
+  .step span { color: var(--muted); font-size: 13px; }
+  .foot { margin-top: 26px; font-size: 12px; color: var(--muted); }
+  .foot a { color: var(--brand); }
+
+  @media (prefers-reduced-motion: no-preference) { .dot { animation: pulse 2s ease-in-out infinite; } }
+  @keyframes pulse { 50% { opacity: .35; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="intro">
+    <h1>Supervisor app blueprint</h1>
+    <p>What each page of the voice-agent supervisor app shows, and why. Click the pages in the sidebar. The lettered markers on each page match the notes on the right. Everything uses the app's real colours, so this is how it will look. All numbers, names and calls are example data.</p>
+    <div class="legend">
+      Data:
+      <span class="chip s-ready">Ready now</span>
+      <span class="chip s-query">New query on data we already store</span>
+      <span class="chip s-new">Needs new data captured</span>
+      <span class="chip s-later">Later</span>
+    </div>
+  </header>
+
+  <div class="stage">
+    <div class="app" id="app">
+      <aside class="side" aria-label="App navigation">
+        <div class="brandbox"><b>Voice agents</b><span>techbridge</span></div>
+        <div id="navlist" style="display:contents"></div>
+        <div class="status"><div><span class="dot"></span><b style="color:var(--text)">Live</b></div><div style="padding-left:14px">Up 3:42:10</div></div>
+      </aside>
+      <main class="main" id="page"></main>
+    </div>
+
+    <section class="notes" aria-label="Notes for this page">
+      <div class="head"><h2 id="notes-title">Live</h2><button class="toggle" id="mk-toggle" type="button" aria-pressed="true">Hide markers</button></div>
+      <div class="purpose" id="purpose"></div>
+      <div id="notes" class="notes"></div>
+    </section>
+  </div>
+
+  <section class="order" aria-labelledby="order-h">
+    <h2 id="order-h">Suggested build order</h2>
+    <p>Each step is one slice: built, tested, and checked live on the VM before the next, as usual. The order puts the biggest gain for supervisors first, and waits to build pages that depend on data we don't capture yet.</p>
+    <div class="steps">
+      <div class="step"><small>Next</small><b>Insights page + "today" numbers on Live</b><span>One summary query over the calls table. Unlocks E, K, L, M, N. Numbers click through to Calls, filtered.</span></div>
+      <div class="step"><small>Then</small><b>Calls page upgrade</b><span>Outcome chips, quick filters, and the caller's first line in the list. The detail view gets the timing strip (needs the per-call greeting time stored).</span></div>
+      <div class="step"><small>Then</small><b>Agent stats</b><span>Per-agent calls today, average length, and the share sent to a human.</span></div>
+      <div class="step"><small>Then</small><b>Activity feed + alerts on Live</b><span>Needs AI-model errors counted (pairs with the parked "apologise and transfer" item, IMP-008).</span></div>
+      <div class="step"><small>Then</small><b>Login, then office-network access</b><span>Already planned (IMP-010). Required before Settings, because Settings can change things.</span></div>
+      <div class="step"><small>Later</small><b>Settings</b><span>Agents, prompts, departments and hours without editing YAML (product theme 3).</span></div>
+    </div>
+  </section>
+
+  <p class="foot">Sources used for the layout choices: real-time and historical views kept apart, and only the few numbers that need action on the live screen (<a href="https://customerthink.com/whats-on-your-supervisor-screen-agent-kpis-to-watch/">CustomerThink</a>, <a href="https://docs.voiso.com/docs/reporting-real-time-dashboard-overview.md">Voiso</a>); AI-agent metrics such as containment, escalation reasons and time to first word, with every number drilling down to the calls behind it (<a href="https://hamming.ai/blog/voice-agent-dashboard-template">Hamming</a>, <a href="https://www.parloa.com/knowledge-hub/conversational-ai-analytics/">Parloa</a>).</p>
+</div>
+
+<script>
+const ICON = {
+  live: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+  calls: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
+  insights: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16V11"/><path d="M12 16V7"/><path d="M17 16v-3"/></svg>',
+  agents: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>'
+};
+const chip = (s) => ({ ready: '<span class="chip s-ready">Ready now</span>', query: '<span class="chip s-query">New query</span>', new: '<span class="chip s-new">Needs new data</span>', later: '<span class="chip s-later">Later</span>' })[s];
+
+/* ---- charts, drawn to one scale ---- */
+function hourChart() {
+  const hours = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+  const ai =  [3, 6, 9, 7, 4, 5, 8, 6, 5, 2];
+  const hu =  [1, 1, 2, 2, 1, 1, 2, 1, 1, 0];
+  const W = 460, H = 150, padL = 26, padB = 20, padT = 8, max = 12;
+  const bw = (W - padL - 6) / hours.length;
+  const y = (v) => padT + (H - padT - padB) * (1 - v / max);
+  let s = `<svg class="bars" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Calls per hour, handled by the AI and sent to a human">`;
+  for (const t of [0, 4, 8, 12]) {
+    s += `<line x1="${padL}" x2="${W - 4}" y1="${y(t)}" y2="${y(t)}" stroke="var(--border)" stroke-width="1"/>`;
+    s += `<text x="${padL - 6}" y="${y(t) + 3}" text-anchor="end">${t}</text>`;
+  }
+  hours.forEach((h, i) => {
+    const x = padL + i * bw + bw * 0.18, w = bw * 0.64;
+    s += `<rect x="${x}" y="${y(ai[i])}" width="${w}" height="${y(0) - y(ai[i])}" fill="var(--ok)" rx="2"/>`;
+    s += `<rect x="${x}" y="${y(ai[i] + hu[i])}" width="${w}" height="${y(ai[i]) - y(ai[i] + hu[i])}" fill="var(--brand)" rx="2"/>`;
+    s += `<text x="${x + w / 2}" y="${H - 6}" text-anchor="middle">${h}:00</text>`;
+  });
+  return s + `</svg><div class="tlegend"><span><i style="background:var(--ok)"></i>Handled by the AI</span><span><i style="background:var(--brand)"></i>Sent to a human</span></div>`;
+}
+function hbars(rows, color) {
+  const max = Math.max(...rows.map((r) => r[1]));
+  return rows.map(([k, v]) => `<div class="hbar"><span>${k}</span><div class="track"><div class="fill" style="width:${(v / max) * 100}%;background:${color}"></div></div><span class="num" style="text-align:right">${v}</span></div>`).join("");
+}
+
+/* ---- pages ---- */
+const PAGES = {
+  live: {
+    label: "Live",
+    purpose: "<b>Job:</b> tell a supervisor in five seconds whether anything needs them right now. Only numbers that call for action; history lives on Insights. Works on a wall screen.",
+    html: `
+      <div class="ph"><div><h2>Live</h2><p>Right now, across every agent</p></div><span class="chip s-ready" style="font-size:12.5px">Audio OK</span></div>
+      <div class="grid" style="gap:14px">
+        <div class="alert mk" data-mk="A" role="status"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;margin-top:1px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><div><b>The AI model failed on 2 calls in the last 15 minutes.</b> Callers heard silence. Gemini returned "high demand".</div><span class="act">See calls</span></div>
+        <div class="grid kpis mk" data-mk="B">
+          <div class="kpi"><small>Agents on call</small><b class="num">2 / 3</b><div class="timing" style="height:6px;margin-top:6px"><span style="width:67%;background:var(--busy)"></span><span style="width:33%;background:var(--surface-2)"></span></div></div>
+          <div class="kpi"><small>Calls today</small><b class="num">47</b><em>since 00:00</em></div>
+          <div class="kpi"><small>Handled by the AI</small><b class="num">81%</b><em>38 of 47</em></div>
+          <div class="kpi"><small>Sent to a human</small><b class="num">7</b><em>billing 4 · support 3</em></div>
+          <div class="kpi warn"><small>Problems</small><b class="num">2</b><em>2 failed · 0 turned away</em></div>
+        </div>
+        <div>
+          <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:4px 0 10px">Agents</h3>
+          <div class="grid agents mk" data-mk="C">
+            <div class="ag busy"><div class="top"><b>Sarah</b><span class="pill p-busy">On call</span></div><div class="row"><span class="mono">+44 7700 900123</span><span class="dur num">4:12</span></div><div class="quote">"I was charged twice for September…"</div></div>
+            <div class="ag busy"><div class="top"><b>Daniel</b><span class="pill p-busy">On call</span></div><div class="row"><span class="mono">+44 7700 900456</span><span class="dur num">0:38</span></div><div class="quote">"Hi, is this the support line?"</div></div>
+            <div class="ag"><div class="top"><b>Alex</b><span class="pill p-free">Free</span></div><div class="row" style="color:var(--muted)"><span>Free for 2:05</span><span>11 calls today</span></div></div>
+          </div>
+        </div>
+        <div class="grid two">
+          <div class="card mk" data-mk="D"><h3>Calls in progress</h3><div class="tbl-wrap"><table>
+            <thead><tr><th>Duration</th><th>Agent</th><th>Caller</th><th>Wait before greeting</th></tr></thead>
+            <tbody><tr><td class="mono num">4:12</td><td>Sarah</td><td class="mono">+44 7700 900123</td><td class="num">1.7 s</td></tr>
+            <tr><td class="mono num">0:38</td><td>Daniel</td><td class="mono">+44 7700 900456</td><td class="num">1.9 s</td></tr></tbody></table></div></div>
+          <div class="card mk" data-mk="E"><h3>Just now</h3><ul class="feed">
+            <li><time>10:42</time><span><b>Sarah</b> sent a caller to <b>billing</b></span></li>
+            <li><time>10:40</time><span style="color:var(--bad)">Call failed: AI model error</span></li>
+            <li><time>10:37</time><span><b>Alex</b> finished a call · 3:48 · handled</span></li>
+            <li><time>10:31</time><span>Caller went quiet · ended after 2 check-ins</span></li>
+          </ul></div>
+        </div>
+      </div>`,
+    notes: [
+      ["A", "Alert strip", "Appears only when something is wrong, and says what callers experienced plus a link to the affected calls. Silent the rest of the time, so it gets noticed when it shows.", "new", "Needs AI-model errors counted per call (today they are only in the log). Pairs with IMP-008."],
+      ["B", "Today's headline numbers", "Five numbers, no more. \"Handled by the AI\" is the single most important number for an AI call centre: calls resolved without a person. Problems turns red only when non-zero.", "query", "Agents on call is ready now. The \"today\" figures need one summary query over the calls table (today's page counts since restart)."],
+      ["C", "Agent cards", "One card per agent: free or on a call, who with, for how long, and the last thing the caller said, so a supervisor can see a call going wrong without listening in.", "query", "Status and duration are ready now. The caller's latest line needs the live turns (already written to the database during the call) sent with the live update."],
+      ["D", "Calls in progress", "The same calls as a compact list, plus how long each caller waited before hearing the agent (IMP-002's measurement).", "ready", "The wait-before-greeting column needs that figure kept per call instead of only in the log."],
+      ["E", "Just now", "A short feed of what happened in the last minutes: transfers, failures, check-ins that ended a call. Answers \"what just happened?\" without leaving the page.", "new", "Built from call records as they are written; the failure entries need the same AI-error capture as A."]
+    ]
+  },
+  calls: {
+    label: "Calls",
+    purpose: "<b>Job:</b> find any finished call fast and understand exactly what happened on it. Every number on Live and Insights opens this page already filtered.",
+    html: `
+      <div class="ph"><div><h2>Calls</h2><p>Finished calls, newest first</p></div></div>
+      <div class="grid two" style="grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)">
+        <div class="card mk" data-mk="F">
+          <div class="search"><div>Search caller number or what was said…</div></div>
+          <div class="chips"><span class="fchip on">Today</span><span class="fchip">Sent to a human</span><span class="fchip">Problems</span><span class="fchip">Longer than 5 min</span><span class="fchip">Agent ▾</span><span class="fchip">Dates ▾</span></div>
+          <div class="tbl-wrap"><table>
+            <thead><tr><th>Time</th><th>Agent</th><th>Outcome</th><th>Length</th><th>Caller said first</th></tr></thead>
+            <tbody>
+              <tr class="sel"><td class="num">10:42</td><td>Sarah</td><td><span class="oc oc-hu">To billing</span></td><td class="mono num">4:51</td><td class="said">"I was charged twice for September"</td></tr>
+              <tr><td class="num">10:40</td><td>Daniel</td><td><span class="oc oc-bad">Failed</span></td><td class="mono num">0:31</td><td class="said">"Can you transfer me to billing?"</td></tr>
+              <tr><td class="num">10:37</td><td>Alex</td><td><span class="oc oc-ai">Handled by AI</span></td><td class="mono num">3:48</td><td class="said">"What are your opening hours?"</td></tr>
+              <tr><td class="num">10:31</td><td>Sarah</td><td><span class="oc oc-q">Caller went quiet</span></td><td class="mono num">0:44</td><td class="said">No speech</td></tr>
+              <tr><td class="num">10:22</td><td>Alex</td><td><span class="oc oc-ai">Handled by AI</span></td><td class="mono num">2:10</td><td class="said">"Do you do weekend support?"</td></tr>
+            </tbody></table></div>
+        </div>
+        <div class="card mk" data-mk="G">
+          <h3>Call · 10:42 · Sarah</h3>
+          <dl class="facts"><div><dt>Caller</dt><dd class="mono">+44 7700 900123</dd></div><div><dt>Length</dt><dd class="num">4:51</dd></div><div><dt>Outcome</dt><dd><span class="oc oc-hu">To billing</span></dd></div><div><dt>Why</dt><dd>Refund needs a person</dd></div></dl>
+          <div class="mk" data-mk="H" style="margin-bottom:12px">
+            <div style="font-size:11.5px;color:var(--muted)">Wait before greeting · 1.75 s</div>
+            <div class="timing"><span style="width:12%;background:var(--muted)"></span><span style="width:17%;background:var(--busy)"></span><span style="width:55%;background:var(--brand)"></span><span style="width:16%;background:var(--ok)"></span></div>
+            <div class="tlegend"><span><i style="background:var(--muted)"></i>Setup 0.2 s</span><span><i style="background:var(--busy)"></i>Voice detector 0.3 s</span><span><i style="background:var(--brand)"></i>Connecting to AI 1.0 s</span><span><i style="background:var(--ok)"></i>Greeting 0.3 s</span></div>
+          </div>
+          <div class="chat mk" data-mk="I">
+            <div class="msg a"><small>Sarah</small>Hi, this is Sarah at Techbridge. How can I help you today?</div>
+            <div class="msg c"><small>Caller</small>I was charged twice for September.</div>
+            <div class="msg a"><small>Sarah</small>Sorry about that. Refunds are handled by our billing team. I'll connect you now.</div>
+            <div class="sys">Transferred to billing · 10:46</div>
+          </div>
+        </div>
+      </div>`,
+    notes: [
+      ["F", "Search and quick filters", "One search box plus one-click chips for the questions supervisors actually ask: today, sent to a human, problems, long calls. The list shows an outcome chip and the caller's first line, so you can scan without opening calls.", "query", "Filters exist today (IMP-007). Outcome chips need the end reasons grouped into a few plain outcomes. The first line comes from the turns table. Searching what was said needs a text index (later)."],
+      ["G", "Call summary", "The facts at the top in plain words, including why it was sent to a human (the reason the AI gave).", "query", "Everything but \"Why\" is ready now. \"Why\" needs the transfer reason saved when the AI calls the transfer tool."],
+      ["H", "Wait-before-greeting strip", "The IMP-002 breakdown drawn as one bar, so a slow greeting shows its cause at a glance.", "new", "Needs the per-call setup timing stored (today it is only in the log). A small database change."],
+      ["I", "The conversation", "The chat you have now, plus system events (transferred, check-in, error) inline where they happened.", "query", "The chat is ready now. Inline events need the call's events stored with timestamps."]
+    ]
+  },
+  insights: {
+    label: "Insights",
+    purpose: "<b>Job:</b> answer \"how are we doing, and is it getting better?\" over a day, a week or a month. Trends and reasons, not live status. Every bar and number opens Calls, filtered.",
+    html: `
+      <div class="ph"><div><h2>Insights</h2><p>Trends over time</p></div><div class="seg"><span>Today</span><span class="on">7 days</span><span>30 days</span></div></div>
+      <div class="grid" style="gap:14px">
+        <div class="grid kpis mk" data-mk="J">
+          <div class="kpi"><small>Calls</small><b class="num">312</b><em><span class="up">▲ 12%</span> vs previous</em></div>
+          <div class="kpi"><small>Handled by the AI</small><b class="num">79%</b><em><span class="up">▲ 3 pts</span></em></div>
+          <div class="kpi"><small>Sent to a human</small><b class="num">17%</b><em><span class="up">▼ 2 pts</span></em></div>
+          <div class="kpi"><small>Average call</small><b class="num">2:41</b><em>median 2:05</em></div>
+          <div class="kpi"><small>Wait before greeting</small><b class="num">1.8 s</b><em>90% under 2.4 s</em></div>
+        </div>
+        <div class="card mk" data-mk="K"><h3>Calls per hour · today</h3>${hourChart()}</div>
+        <div class="grid two" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+          <div class="card mk" data-mk="L"><h3>Why calls went to a human</h3>${hbars([["Billing", 24], ["Support", 17], ["Sales", 6], ["Operator", 6]], "var(--brand)")}</div>
+          <div class="card mk" data-mk="M"><h3>How calls ended</h3>${hbars([["Handled", 246], ["Transferred", 53], ["Went quiet", 8], ["Failed", 5]], "var(--ok)")}</div>
+        </div>
+      </div>`,
+    notes: [
+      ["J", "Headline trends", "The same kind of numbers as Live, but over a period and compared with the one before, with the arrow coloured by whether the change is good (fewer transfers is green).", "query", "One summary query over the calls table, by date range. Wait-before-greeting needs the per-call timing stored (see H)."],
+      ["K", "Calls per hour", "When calls come in and how many the AI handled, stacked. This is what sizes the agent roster: busy hours show where capacity runs out.", "query", "Grouping the calls table by hour."],
+      ["L", "Why calls went to a human", "Which departments take the handovers. A department that grows here is the next thing to teach the AI (see the parked knowledge-base plan).", "ready", "transferred_to is already stored on every call."],
+      ["M", "How calls ended", "Handled, transferred, caller went quiet, failed. Failed should stay near zero; a jump means something broke.", "query", "End causes exist; they need grouping into these few plain outcomes (the same grouping as F)."]
+    ]
+  },
+  agents: {
+    label: "Agents",
+    purpose: "<b>Job:</b> see how each AI agent is doing, and (later) change one. Today: who they are and how their calls go. With Settings: their voice and instructions.",
+    html: `
+      <div class="ph"><div><h2>Agents</h2><p>3 agents in the roster</p></div><div class="seg"><span class="on">Today</span><span>7 days</span></div></div>
+      <div class="card mk" data-mk="N"><div class="tbl-wrap"><table>
+        <thead><tr><th>Agent</th><th>Now</th><th>Voice</th><th>Calls</th><th>Average</th><th>Handled by AI</th><th>Sent to a human</th></tr></thead>
+        <tbody>
+          <tr><td><b>Alex</b></td><td><span class="pill p-free">Free</span></td><td class="mono">helena</td><td class="num">17</td><td class="num">2:31</td><td class="num">88%</td><td class="num">2</td></tr>
+          <tr><td><b>Daniel</b></td><td><span class="pill p-busy">On call</span></td><td class="mono">orion</td><td class="num">14</td><td class="num">2:58</td><td class="num">79%</td><td class="num">3</td></tr>
+          <tr><td><b>Sarah</b></td><td><span class="pill p-busy">On call</span></td><td class="mono">thalia</td><td class="num">16</td><td class="num">3:05</td><td class="num">75%</td><td class="num">4</td></tr>
+        </tbody></table></div></div>
+      <div class="card mk" data-mk="O" style="margin-top:14px"><h3>Sarah · recent calls and instructions</h3>
+        <p style="margin:0 0 8px;color:var(--muted);font-size:13px">Opening line: "Hi, this is Sarah at Techbridge. How can I help you today?"</p>
+        <p style="margin:0;color:var(--muted);font-size:13px">Instructions: prompts/sarah.txt (read-only here; editable in Settings later)</p></div>`,
+    notes: [
+      ["N", "Roster with performance", "One row per agent: status now, voice, calls, average length, and how often each hands callers to a person. A clearly worse row is a prompt to look at that agent's calls or instructions.", "query", "Status is ready now. The numbers are the same summary query as Insights, grouped by agent. The voice needs the roster exposed by the API."],
+      ["O", "Agent detail", "Click an agent: their opening line, instructions, and recent calls. Read-only until Settings exists.", "later", "Read-only view is a small API addition; editing waits for login and Settings."]
+    ]
+  },
+  settings: {
+    label: "Settings",
+    soon: true,
+    purpose: "<b>Job:</b> run the product without editing files on the server (product theme 3). Comes after login, because these pages can change what callers hear.",
+    html: `
+      <div class="ph"><div><h2>Settings</h2><p>Planned. Each row becomes a page.</p></div></div>
+      <div class="later-page mk" data-mk="P">
+        <div class="later-row"><b>Agents &amp; voices</b><span>Add or remove agents, pick a voice, and listen to a sample</span></div>
+        <div class="later-row"><b>Instructions</b><span>Edit each agent's prompt, with a test call before saving</span></div>
+        <div class="later-row"><b>Departments</b><span>Where "billing", "support", "sales" and "operator" transfer to</span></div>
+        <div class="later-row"><b>Business hours</b><span>What callers hear outside opening hours</span></div>
+        <div class="later-row"><b>Silence check-in</b><span>The "Are you still there?" timing and wording (IMP-001)</span></div>
+        <div class="later-row"><b>People &amp; login</b><span>Supervisor accounts (after IMP-010)</span></div>
+      </div>`,
+    notes: [
+      ["P", "Everything in config.yaml, safely editable", "Each setting keeps the same validation the config loader already has, so the web app can't save a setting that the bot would refuse at start-up.", "later", "Needs login first, then a safe way to apply changes without dropping live calls."]
+    ]
+  }
+};
+
+const ORDER = ["live", "calls", "insights", "agents", "settings"];
+let current = "live";
+
+function render() {
+  const nav = document.getElementById("navlist");
+  nav.innerHTML = ORDER.map((k) => `<button class="nav" type="button" data-p="${k}" ${k === current ? 'aria-current="page"' : ""}>${ICON[k]}${PAGES[k].label}${PAGES[k].soon ? '<span class="soon">later</span>' : ""}</button>`).join("");
+  const p = PAGES[current];
+  document.getElementById("page").innerHTML = p.html;
+  document.getElementById("notes-title").textContent = p.label + (p.soon ? " (later)" : "");
+  document.getElementById("purpose").innerHTML = p.purpose;
+  document.getElementById("notes").innerHTML = p.notes.map(([l, h, what, s, data]) =>
+    `<article class="note"><span class="l">${l}</span><div><h3>${h}</h3><p>${what}</p><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">${chip(s)}<span style="font-size:12px;color:var(--muted)">${data}</span></div></div></article>`).join("");
+}
+
+document.getElementById("navlist").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-p]");
+  if (!b) return;
+  current = b.dataset.p;
+  try { history.replaceState(null, "", "#" + current); } catch (_) {}
+  render();
+});
+document.getElementById("mk-toggle").addEventListener("click", (e) => {
+  const on = document.getElementById("app").classList.toggle("hide-mk");
+  e.currentTarget.setAttribute("aria-pressed", String(!on));
+  e.currentTarget.textContent = on ? "Show markers" : "Hide markers";
+});
+const start = (location.hash || "").slice(1);
+if (PAGES[start]) current = start;
+render();
+</script>
+
+</body>
+</html>
