@@ -978,7 +978,7 @@ Review notes:
   backup/2026-09-29-pre-IMP-012.
 
 ### IMP-013 — Let the call database grow: add columns safely, and record two new facts per call
-status: LIVE-TEST
+status: DONE (live-verified on the VM 2026-09-29: 1 on a mid-sentence hang-up, 0 after the agent's goodbye)
 kind: SLICE (epic: IMP-004; step 1 of [[web-app-design]] "honest numbers", part 1 of 3)
 for: supervisor (indirectly: the facts the next slices need), developer
 source: web-app-design v2; IMP-002 noted the store has no migrations
