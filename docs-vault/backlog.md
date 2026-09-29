@@ -288,13 +288,13 @@ slices (in order; each works on its own and gets its own live check):
   1. **Call history, read-only** (IMP-005, DONE 2026-09-29). A "Recent calls" list on the
      existing page: time, caller, agent, duration, how it ended, transferred to.
      Needs the store's first READ path (below). Loopback only, like today.
-  2. **Call detail + search** (IMP-007, built; LIVE-TEST). Click a call: its transcript from the `turns`
+  2. **Call detail + search** (IMP-007, DONE 2026-09-29). Click a call: its transcript from the `turns`
      table, cause, timings (IMP-002's `setup:` total, if stored), a filter by
      date / agent / outcome / caller number. Known gap to confirm first:
      agent-side turns may not be in `turns` yet (roadmap §2, deferred from
      Stage B); if not, this slice shows the caller side plus a link to
      `conversation.json`.
-  3. **Login.** One supervisor password (hash in `.env`, never in YAML), a
+  3. **Login** (IMP-010, proposed; decide IMP-009 first). One supervisor password (hash in `.env`, never in YAML), a
      session cookie, every page and API route behind it, plus a logout. This is
      what makes slice 4 safe; [[decisions]] 043 is exactly this gap.
   4. **Reachable from the office network.** Bind to a LAN address only when
@@ -446,7 +446,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-007 — Call detail and search in the supervisor page (slice 2 of IMP-004)
-status: LIVE-TEST
+status: DONE (live-verified on the VM 2026-09-29)
 kind: SLICE (epic: IMP-004)
 for: supervisor
 source: product theme 1
@@ -592,6 +592,93 @@ live check needed (on the VM): temporarily set `engine.llm.model` to a name
 risk / blast radius: engine only. The main risk is a false timeout on a slow
   but healthy reply: 6 s is well above the ~0.7 s normal latency measured for
   this model, and it is configurable.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-009 — Decide: keep the web app as plain HTML, or adopt a frontend framework
+status: PROPOSED
+kind: DECISION (for epic IMP-004)
+for: supervisor (what they get) and developer (what it costs to change)
+source: product theme 1; IMP-004 said to decide before slice 3
+size: S (a decision and a decisions.md entry; no code)
+why (what they can do afterwards that they can't today): nothing new for a
+  user. It settles HOW the next three slices and the admin screens (theme 3)
+  get built, before login makes the page multi-screen.
+the options, honestly:
+  A. **Stay plain** (recommended now). One HTML file served from memory, no
+     build step, no npm, no CDN (the VM may have no internet; decisions 045).
+     Today it is ~400 lines and still readable. Login adds a second small page.
+     Cost: it gets harder to maintain around 1,000+ lines or several screens.
+  B. **A small no-build library** (e.g. Preact + htm, or Alpine.js) vendored
+     as ONE file into `api/static/`, not loaded from a CDN. Components without
+     a build step. Cost: one more thing to learn, and a vendored file to update
+     by hand.
+  C. **A full framework** (React/Vue/Svelte + Vite). The nicest to build big
+     UIs in. Cost: Node and npm on the dev machine, a build step before every
+     deploy, a second language toolchain for a small team, and the built files
+     either committed or built on the VM.
+recommendation: **A now, with a trigger to revisit:** move to B when the page
+  passes ~1,000 lines or theme 3 (admin screens with forms) starts. Written
+  into decisions.md so the question is not re-argued each slice.
+acceptance criteria: you pick A, B or C; the choice and its trigger go into
+  decisions.md; IMP-010 follows it.
+test plan (offline): none (a decision).
+live check needed (on the VM): none.
+risk / blast radius: none now. Choosing C later is a real migration, which is
+  why the trigger matters.
+commit: —
+why rejected: —
+Review notes: —
+
+### IMP-010 — Login for the supervisor page (slice 3 of IMP-004)
+status: PROPOSED
+kind: SLICE (epic: IMP-004)
+for: supervisor
+source: product theme 1; decisions 043 (the page has no auth, which is why
+  it is loopback-only)
+size: M
+why (what they can do afterwards that they can't today): the page and every
+  API route that shows caller numbers or transcripts require a password.
+  That is the precondition for slice 4: opening it to the office network
+  instead of an SSH tunnel. On its own it also stops anyone who reaches the
+  VM's loopback (another user, another service) from reading call data.
+acceptance criteria:
+  - one supervisor password, stored only as a salted hash (stdlib
+    `hashlib.scrypt`) in `.env` as `SUPERVISOR_PASSWORD_HASH`, referenced from
+    config as `service.api.password_hash_env` (the same *_env pattern as the
+    API keys). `python tools/set_password.py` prompts for the password and
+    prints the line to paste into `.env`, so it never touches a file itself.
+  - a session cookie signed with HMAC (secret: `SUPERVISOR_SESSION_SECRET` in
+    .env, or generated at start-up, which logs everyone out on restart;
+    stated). HttpOnly, SameSite=Strict, 12 h lifetime, and Secure when
+    behind HTTPS.
+  - `/login` (a small form page, same style) and `/logout`. Protected: `/`,
+    `/api`, `/pool`, `/calls`, `/history*`, and `WS /live`. **Open**: `/health`
+    (load balancers) and `/metrics` (numbers only, already tested to carry no
+    caller data), both documented.
+  - wrong password: a slow, generic "wrong password" with a small per-IP
+    lockout after 5 tries in a minute. Nothing logs the password.
+  - **login is off unless configured**, so today's VM keeps working unchanged
+    until you set the hash; start-up logs clearly whether it is on. Binding to
+    a non-loopback host WITHOUT login stays a loud warning (slice 4 turns that
+    into a refusal).
+  - no new dependency (no aiohttp-session): hashing and signing are stdlib.
+test plan (offline): hash/verify round-trip and wrong password; cookie
+  tamper, expiry and wrong secret rejected; every protected route gives 401
+  (API) or a redirect to /login (page) without a cookie, and 200 with one;
+  /health and /metrics stay open; WS /live refuses without a cookie; lockout
+  after 5 failures; login off = today's behaviour exactly; config validation;
+  the set_password tool prints a hash that verifies.
+live check needed (on the VM): run `tools/set_password.py`, paste the lines
+  into .env, restart. Open the dashboard: you land on /login. A wrong password
+  is refused; the right one shows the dashboard with live updates. Logout
+  returns you to /login. Restart bot.py: still logged in if the session
+  secret is in .env, logged out if not. `curl localhost:8091/history` without
+  a cookie gives 401; `curl localhost:8091/health` still works.
+risk / blast radius: `api/` and `core/config.py` only; nothing in the call
+  path. The main risk is locking yourself out: removing the hash from .env
+  turns login off again, and that is documented.
 commit: —
 why rejected: —
 Review notes: —
