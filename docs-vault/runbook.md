@@ -573,6 +573,19 @@ the database has no rows for this `tenant_id`. "Call history is unavailable"
 means the read failed; the bot log has a `/history:` warning with the reason.
 With `service.records.enabled: false` the panel is always empty.
 
+**Click a call** to open its detail below the table: the facts, plus the
+conversation as a chat. A grey note under it means the transcript is partial:
+"only the caller's side" means that call's `conversation.json` is gone from
+`recordings/`; "no transcript" means none was ever written (e.g. load-test
+calls). The **filter bar** narrows the list by date range, agent, outcome and
+caller number; "Clear" resets it. The same filters work on the API:
+`curl 'localhost:8091/history?persona=Sarah&outcome=transferred&since=2026-09-01'`.
+
+> **Port forward gotcha.** If VS Code forwards the VM's 8091 to the laptop,
+> anything on the laptop that uses `localhost:8091` (a local bot, a script)
+> is talking to the **live VM**. A local bot then can't bind 8091 and says
+> "API could not start". Run local test bots on other ports.
+
 ### The control plane
 
 A read-only HTTP surface on `127.0.0.1:8091` (`service.api`). Everything it

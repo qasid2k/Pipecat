@@ -128,15 +128,20 @@ An approved `EPIC` is never built itself. Build its lowest-numbered approved
    - the full suite is green, and `Ran N tests` is above the baseline
    - `tests/test_layering.py` is green
    - if the item touches `transports/`, `core/pool.py`, `bot.py`, `api/` or
-     `engine/session_transport.py`: a silent-engine smoke run. Generate the
-     config **in the repo root** (prompt paths are relative to the config file,
-     so a scratch directory won't work) with
-     `tools/loadtest.py --write-config config.loadtest.yaml` (the file is
-     gitignored, so only create it if it doesn't exist). Start `bot.py
-     config.loadtest.yaml` in the background, wait for `/health`, run
-     `--spike 5 --duration 15`, check that the new behaviour is visible where it
-     can be (e.g. `/metrics`), then stop the bot and confirm ports 8090/8091
-     are free. The run must show no dropped frames or pacer slips.
+     `engine/session_transport.py`: a silent-engine smoke run **on its own
+     ports**. The laptop's 8090/8091 may be a VS Code port forward to the LIVE
+     VM; on 2026-09-29 a smoke run's API failed to bind and its requests went to
+     the VM's real bot instead. So: generate the config **in the repo root**
+     (prompt paths are relative to the config file) with
+     `tools/loadtest.py --write-config config.loadtest.yaml` if it doesn't
+     exist, copy it to `config.smoke.local.yaml` (gitignored) with
+     `audiosocket_port: 18090` and api `port: 18091`, and start `bot.py
+     config.smoke.local.yaml` in the background. Wait for
+     `http://127.0.0.1:18091/health` and **check that it says
+     `"engine": "silent"`**; if not, you are talking to something else, so stop.
+     Run `tools/loadtest.py --port 18090 --api-port 18091 --spike 5 --duration 15`,
+     exercise the new behaviour on 18091, then stop the bot and confirm
+     18090/18091 are free. The run must show no dropped frames or pacer slips.
    After **2** failed fix attempts: run `git restore` on the files you changed,
    set the item to `BLOCKED` with the exact failure, log it, and stop. Commit
    nothing.

@@ -288,7 +288,7 @@ slices (in order; each works on its own and gets its own live check):
   1. **Call history, read-only** (IMP-005, DONE 2026-09-29). A "Recent calls" list on the
      existing page: time, caller, agent, duration, how it ended, transferred to.
      Needs the store's first READ path (below). Loopback only, like today.
-  2. **Call detail + search** (IMP-007, proposed). Click a call: its transcript from the `turns`
+  2. **Call detail + search** (IMP-007, built; LIVE-TEST). Click a call: its transcript from the `turns`
      table, cause, timings (IMP-002's `setup:` total, if stored), a filter by
      date / agent / outcome / caller number. Known gap to confirm first:
      agent-side turns may not be in `turns` yet (roadmap §2, deferred from
@@ -446,7 +446,7 @@ why rejected: —
 Review notes: —
 
 ### IMP-007 — Call detail and search in the supervisor page (slice 2 of IMP-004)
-status: PROPOSED
+status: LIVE-TEST
 kind: SLICE (epic: IMP-004)
 for: supervisor
 source: product theme 1
@@ -487,12 +487,74 @@ live check needed (on the VM): make 2 calls (one transfer). Click each: both
 risk / blast radius: `api/`, `core/records.py`, `stores/`, dashboard. The only
   new risk is the file read, which is bounded to the recordings directory and
   run in a thread. Loopback-only, no new exposure.
-commit: —
+commit: on feature/multi-agent-pool (the commit titled `IMP-007: …`)
 why rejected: —
-Review notes: —
+Review notes:
+  WHAT CHANGED, file by file
+  - core/records.py: `CallFilter` (the things you can filter by), plus two
+    new read methods on the store: `search_calls(…, filters)` and
+    `call_detail(call_id)`. Both return nothing by default, so older stores
+    keep working. RecordWriter passes both through.
+  - stores/sqlite_store.py: the filter becomes a SQL WHERE clause built only
+    from bound parameters (browser input is never pasted into SQL). The
+    caller search treats `%` and `_` as plain characters. `call_detail`
+    returns the row plus the caller's turns. Same rule as before: its own
+    read-only connection, in a thread.
+  - api/server.py: `/history` reads the filters (a bad date or outcome gives
+    400 with a reason). New `GET /history/<call_id>`: a bad id gives 400,
+    unknown gives 404. The transcript comes from the call's
+    conversation.json, which is the only place the agent's words are kept,
+    read in a thread and only if the file is inside recordings/. Otherwise
+    it falls back to the caller-only turns and says so. The file path is
+    never sent to the browser.
+  - api/dashboard.html: a filter bar above "Recent calls" (from/to date,
+    agent, outcome, caller) with Filter and Clear. Clicking a row opens a
+    "Call" panel with the facts and a chat view.
+  - tests/test_call_detail.py: 19 tests (each filter, wildcard escaping,
+    detail + fallback, a path outside recordings/ is never read, the file
+    read stays off the event loop, 400/404, and the page elements).
+  - docs: decisions 055, changelog, runbook. /improve's smoke run now uses
+    its own ports (see below).
+  WHY THIS WAY: see decisions 055. In short, the database only has the
+  caller's side, the file has both, and the file path is confined so this
+  can never become "read any file".
+  OVER THE SIZE LIMIT: about 630 changed lines of code + tests (roughly 330
+  code, 280 tests), against the loop's ~400-line rule. The filters and the
+  detail view should have been two slices. Flagged here rather than trimmed
+  after the fact, because cutting tests to fit the rule would be worse.
+  ONE CHANGE FROM THE PROPOSAL: the route is `/history/<id>`, not
+  `/calls/<id>`, because `/calls` means calls in progress.
+  NOT INCLUDED (and why): the time-to-greeting figure in the detail view.
+  IMP-002 logs it but never stored it per call (no schema change), so it
+  would need a migration: a later item.
+  ALREADY CHECKED HERE: 201 tests pass (182 + 19), and the JavaScript passes a
+  syntax check. Smoke run on isolated ports 18090/18091: spike of 5 clean,
+  the agent filter returned only that agent, a bad date gave 400, the detail
+  route answered (source "none", correct for silent-engine calls, which
+  write no transcript), an unknown id gave 404, and a bad id gave 400.
+  INCIDENT DURING THE BUILD (harmless, fixed): the first smoke run's API
+  couldn't bind laptop port 8091, because VS Code forwards it to the VM. My
+  test requests (read-only GETs of /history) therefore reached the VM's live
+  bot. The load test itself refused to run, because it saw a real engine, so
+  no calls were placed. Fixed by moving smoke runs to 18090/18091 with an
+  engine check (improve.md).
+  HOW TO TEST ON THE VM
+  1. `git pull` (expect the IMP-007 commit), restart bot.py.
+  2. Open the dashboard (port 8091 forward), go to "Recent calls", and click
+     yesterday's billing call (Alex, 2026-09-29 ~04:35 UTC). The chat should
+     show the greeting, your request and "connecting you…", and "Transferred
+     to" should say billing.
+  3. Make a new short call, then click it: both sides appear in order.
+  4. Filters: pick an agent and click Filter (only that agent's calls), then
+     outcome "transferred" (only transfers), then type part of your extension
+     in caller. Clear brings the full list back.
+  5. A call from before Phase 2 (or a load-test call) should show the grey
+     "no transcript" note, not an error.
+  UNDO: `git revert <the IMP-007 commit>` and push, or return to tag
+  backup/2026-09-29-pre-IMP-007.
 
 ### IMP-008 — When the AI model fails, the caller hears an apology and a human, not silence
-status: PROPOSED
+status: PARKED (2026-09-29, by request; no second LLM yet. Note: only the optional fallback_model needs one, and the apology + transfer works with one model)
 kind: FIX
 for: caller
 source: live call 2026-09-28 17:47 (Gemini `503 high demand` after 16 s of silence; the caller hung up, and no transfer happened)

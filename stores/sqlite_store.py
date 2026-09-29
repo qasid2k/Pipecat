@@ -39,10 +39,11 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from dataclasses import asdict
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Sequence
 
-from core.records import CallRecord, CallStore, TurnRecord
+from core.records import CallFilter, CallRecord, CallStore, TurnRecord
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS calls (
@@ -100,6 +101,11 @@ _CALL_COLUMNS = [
     "pacer_slips",
     "transcript_path", "conversation_path", "node_id",
 ]
+
+
+def _next_day(day: str) -> str:
+    """'2026-09-28' -> '2026-09-29'. The API has already checked the format."""
+    return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
 
 
 class SqliteCallStore(CallStore):
@@ -183,7 +189,49 @@ class SqliteCallStore(CallStore):
     async def recent_calls(self, limit: int, tenant_id: str) -> list[dict]:
         return await asyncio.to_thread(self._read_recent, limit, tenant_id)
 
-    def _read_recent(self, limit: int, tenant_id: str) -> list[dict]:
+    async def search_calls(self, limit: int, tenant_id: str, filters: CallFilter) -> list[dict]:
+        return await asyncio.to_thread(self._read_recent, limit, tenant_id, filters)
+
+    async def call_detail(self, call_id: str, tenant_id: str) -> dict | None:
+        return await asyncio.to_thread(self._read_detail, call_id, tenant_id)
+
+    def _reader(self) -> sqlite3.Connection | None:
+        if not self._path.exists():
+            return None  # nothing recorded yet -- and don't create an empty file
+        conn = sqlite3.connect(f"file:{self._path.as_posix()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    @staticmethod
+    def _where(tenant_id: str, f: CallFilter | None) -> tuple[str, list]:
+        """The WHERE clause for a filter, with every value a bound parameter --
+        these come straight from a browser, so nothing is ever pasted into SQL."""
+        clauses, params = ["tenant_id = ?"], [tenant_id]
+        if f is not None:
+            if f.since:
+                clauses.append("started_at >= ?")
+                params.append(f.since)
+            if f.until:
+                # Inclusive: everything before the START of the next day.
+                # started_at is ISO text, so this compares correctly as text.
+                clauses.append("started_at < ?")
+                params.append(_next_day(f.until))
+            if f.persona:
+                clauses.append("persona = ?")
+                params.append(f.persona)
+            if f.transferred is True:
+                clauses.append("transferred_to IS NOT NULL")
+            elif f.transferred is False:
+                clauses.append("transferred_to IS NULL")
+            if f.caller:
+                # Literal substring: % and _ typed into a search box mean
+                # themselves, not "anything".
+                escaped = f.caller.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                clauses.append("caller_id LIKE ? ESCAPE '\\'")
+                params.append(f"%{escaped}%")
+        return " AND ".join(clauses), params
+
+    def _read_recent(self, limit: int, tenant_id: str, filters: CallFilter | None = None) -> list[dict]:
         """Its OWN short-lived, read-only connection, never the writer's.
 
         The writer's connection belongs to the RecordWriter task; sharing it
@@ -191,19 +239,39 @@ class SqliteCallStore(CallStore):
         mode lets this reader run alongside the writer without either blocking
         the other, and `mode=ro` means a bug here cannot modify a record.
         """
-        if not self._path.exists():
-            return []  # nothing recorded yet -- and don't create an empty file
-        conn = sqlite3.connect(f"file:{self._path.as_posix()}?mode=ro", uri=True)
+        conn = self._reader()
+        if conn is None:
+            return []
+        where, params = self._where(tenant_id, filters)
         try:
-            conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 f"SELECT {', '.join(self._RECENT_COLUMNS)} FROM calls "
-                "WHERE tenant_id = ? ORDER BY started_at DESC LIMIT ?",
-                (tenant_id, limit),
+                f"WHERE {where} ORDER BY started_at DESC LIMIT ?",
+                (*params, limit),
             ).fetchall()
         finally:
             conn.close()
         return [dict(r) for r in rows]
+
+    def _read_detail(self, call_id: str, tenant_id: str) -> dict | None:
+        conn = self._reader()
+        if conn is None:
+            return None
+        try:
+            row = conn.execute(
+                f"SELECT {', '.join(self._RECENT_COLUMNS)}, uniqueid, linkedid, "
+                "conversation_path FROM calls WHERE call_id = ? AND tenant_id = ?",
+                (call_id, tenant_id),
+            ).fetchone()
+            if row is None:
+                return None
+            turns = conn.execute(
+                "SELECT speaker, text, at FROM turns WHERE call_id = ? ORDER BY seq",
+                (call_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return {"call": dict(row), "turns": [dict(t) for t in turns]}
 
     async def close(self) -> None:
         await asyncio.to_thread(self._close)

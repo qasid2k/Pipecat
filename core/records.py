@@ -106,6 +106,24 @@ class TurnRecord:
     language: str | None = None
 
 
+@dataclass(frozen=True)
+class CallFilter:
+    """What the supervisor page can narrow the call list by. Every field is
+    optional; an empty filter is the plain newest-first list.
+
+    Dates are `YYYY-MM-DD` and inclusive at both ends: `until="2026-09-28"`
+    includes calls from that whole day.
+    """
+
+    since: str | None = None
+    until: str | None = None
+    persona: str | None = None
+    # True = handed to a department, False = the agent dealt with it.
+    transferred: bool | None = None
+    # A substring of the caller number, matched literally.
+    caller: str | None = None
+
+
 class CallStore(ABC):
     """Somewhere records go. Implementations live outside core/."""
 
@@ -135,6 +153,17 @@ class CallStore(ABC):
         call process ([[decisions]] 043).
         """
         return []
+
+    async def search_calls(self, limit: int, tenant_id: str, filters: CallFilter) -> list[dict]:
+        """`recent_calls`, narrowed by `filters`. Same rules, same default."""
+        return []
+
+    async def call_detail(self, call_id: str, tenant_id: str) -> dict | None:
+        """One finished call: `{"call": row, "turns": [caller turns in order]}`,
+        or None if this tenant has no such call. The row includes
+        `conversation_path`, which the API reads for the agent's side --
+        `turns` holds only what the CALLER said."""
+        return None
 
     @property
     def describe(self) -> str:
@@ -259,6 +288,12 @@ class RecordWriter:
         turns a failure into a 503 instead of an empty list that looks like a
         quiet day."""
         return await self._store.recent_calls(limit=limit, tenant_id=tenant_id)
+
+    async def search_calls(self, limit: int, tenant_id: str, filters: CallFilter) -> list[dict]:
+        return await self._store.search_calls(limit=limit, tenant_id=tenant_id, filters=filters)
+
+    async def call_detail(self, call_id: str, tenant_id: str) -> dict | None:
+        return await self._store.call_detail(call_id=call_id, tenant_id=tenant_id)
 
     async def close(self, timeout: float = 5.0) -> None:
         """Drain what is queued, then release the store.

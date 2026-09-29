@@ -18,3 +18,5 @@ BLOCKED lines should be rare and explained. Related: [[backlog]],
 | 2026-09-28 18:45 | BUILD | IMP-005 | tests 168→182 | recent-calls list + /history built, smoke clean; LIVE-TEST |
 | 2026-09-29 09:00 | VERIFIED | IMP-005 | tests 182 | live on VM: recent calls work; tagged release/2026-09-29-IMP-005 |
 | 2026-09-29 09:05 | PROPOSE | IMP-007, IMP-008 | tests 182 | web app slice 2 (detail+search); LLM-failure apology + transfer |
+| 2026-09-29 09:20 | PARK | IMP-008 | tests 182 | parked by request; IMP-007 approved, build started |
+| 2026-09-29 10:00 | BUILD | IMP-007 | tests 182→201 | call detail + filters built; isolated-port smoke clean; LIVE-TEST |

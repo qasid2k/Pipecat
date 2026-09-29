@@ -40,6 +40,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -48,13 +50,85 @@ from loguru import logger
 
 from core.live import Counters, LiveCalls
 from core.pool import AgentPool
-from core.records import RecordWriter
+from core.records import CallFilter, RecordWriter
 
 
 # /history page size. Capped so a hand-typed ?limit= cannot make one request
 # read the whole table into memory on the call process.
 HISTORY_DEFAULT = 50
 HISTORY_MAX = 200
+# Call ids are UUIDs (or `direct-<addr>` for 6000 calls). Anything else in the
+# URL is a typo or a probe, and gets a 400 before it reaches the database.
+CALL_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+# Where engine/pipecat_engine.py writes transcripts. The detail view reads ONLY
+# inside it: the path comes from a database row, and a row is not a promise.
+RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
+
+
+def normalize_conversation(messages: list) -> list[dict]:
+    """conversation.json's LLM messages -> `[{"speaker", "text"}]` for a person.
+
+    `user` is the caller; `assistant` (or Google's `model`) is the agent. Tool
+    calls and their results are machinery, not conversation, so they are
+    dropped. Content comes as a string, a list of typed parts, or Google's
+    `parts`; all three reduce to their text.
+    """
+    out = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        speaker = {"user": "caller", "assistant": "agent", "model": "agent"}.get(m.get("role"))
+        if speaker is None:
+            continue
+        content = m.get("content", m.get("parts"))
+        if isinstance(content, list):
+            text = " ".join(
+                str(p.get("text", "")) for p in content if isinstance(p, dict) and p.get("text")
+            )
+        else:
+            text = str(content or "")
+        if text.strip():
+            out.append({"speaker": speaker, "text": text.strip()})
+    return out
+
+
+def _read_conversation(path: str, root: Path) -> list[dict] | None:
+    """Read one call's conversation.json, or None. Runs in a thread.
+
+    Refuses anything that does not resolve to a file INSIDE `root`, so a bad
+    or tampered row cannot turn this endpoint into "read any file on the VM".
+    """
+    if not path:
+        return None
+    try:
+        target = Path(path).resolve()
+        if not target.is_relative_to(root.resolve()) or not target.is_file():
+            return None
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return normalize_conversation(data.get("conversation", [])) if isinstance(data, dict) else None
+
+
+def _parse_filters(q) -> CallFilter | None:
+    """Query string -> CallFilter. Raises ValueError with a message for a 400."""
+    for key in ("since", "until"):
+        if q.get(key):
+            try:
+                date.fromisoformat(q[key])
+            except ValueError:
+                raise ValueError(f"{key} must be a date like 2026-09-28") from None
+    outcome = q.get("outcome") or None
+    if outcome not in (None, "transferred", "handled"):
+        raise ValueError("outcome must be 'transferred' or 'handled'")
+    f = CallFilter(
+        since=q.get("since") or None,
+        until=q.get("until") or None,
+        persona=(q.get("persona") or "").strip()[:64] or None,
+        transferred={"transferred": True, "handled": False}.get(outcome),
+        caller=(q.get("caller") or "").strip()[:32] or None,
+    )
+    return None if f == CallFilter() else f
 
 
 def _rss_bytes() -> int | None:
@@ -98,8 +172,10 @@ class ApiServer:
         port: int = 8091,
         tenant_id: str = "default",
         engine_provider: str = "unknown",
+        recordings_dir: Path = RECORDINGS_DIR,
     ):
         self._engine_provider = engine_provider
+        self._recordings_dir = recordings_dir
         self._pool = pool
         self._live = live
         self._counters = counters
@@ -140,6 +216,7 @@ class ApiServer:
                 web.get("/pool", self._pool_state),
                 web.get("/calls", self._calls),
                 web.get("/history", self._history),
+                web.get("/history/{call_id}", self._call_detail),
                 web.get("/metrics", self._metrics),
                 web.get("/live", self._live_socket),
             ]
@@ -279,7 +356,8 @@ class ApiServer:
                 "service": "voice-agent",
                 "tenant": self._tenant_id,
                 "endpoints": [
-                    "/", "/health", "/pool", "/calls", "/history", "/metrics",
+                    "/", "/health", "/pool", "/calls", "/history",
+                    "/history/{call_id}", "/metrics",
                     "/live (ws)",
                 ],
             }
@@ -349,14 +427,56 @@ class ApiServer:
         except ValueError:
             return _json({"error": "limit must be a whole number"}, status=400)
         limit = max(1, min(limit, HISTORY_MAX))
+        try:
+            filters = _parse_filters(request.query)
+        except ValueError as e:
+            return _json({"error": str(e)}, status=400)
         if self._records is None:
             return _json({"count": 0, "calls": []})
         try:
-            calls = await self._records.recent_calls(limit=limit, tenant_id=self._tenant_id)
+            if filters is None:
+                calls = await self._records.recent_calls(limit=limit, tenant_id=self._tenant_id)
+            else:
+                calls = await self._records.search_calls(
+                    limit=limit, tenant_id=self._tenant_id, filters=filters
+                )
         except Exception as e:  # noqa: BLE001 -- a store fault must not become a 500 page
             logger.warning(f"/history: could not read call records: {e!r}")
             return _json({"error": "call history is unavailable right now"}, status=503)
         return _json({"count": len(calls), "calls": calls})
+
+    async def _call_detail(self, request: web.Request) -> web.Response:
+        """One finished call with its conversation. **Contains what the caller
+        said**, so it is loopback-only like the rest (login: IMP-004 slice 3).
+
+        The transcript prefers the call's conversation.json, the only place the
+        AGENT's side is kept, read in a thread and only from inside the
+        recordings directory. If that file is gone it falls back to the
+        caller-only rows in `turns`, and says which one it used.
+        """
+        call_id = request.match_info["call_id"]
+        if not CALL_ID.match(call_id):
+            return _json({"error": "not a call id"}, status=400)
+        if self._records is None:
+            return _json({"error": "call records are disabled"}, status=404)
+        try:
+            detail = await self._records.call_detail(call_id=call_id, tenant_id=self._tenant_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"/history/{call_id}: could not read call records: {e!r}")
+            return _json({"error": "call history is unavailable right now"}, status=503)
+        if detail is None:
+            return _json({"error": "no such call"}, status=404)
+
+        call = dict(detail["call"])
+        path = call.pop("conversation_path", "") or ""
+        transcript = await asyncio.to_thread(_read_conversation, path, self._recordings_dir)
+        source = "conversation"
+        if not transcript:
+            transcript = [
+                {"speaker": t["speaker"], "text": t["text"]} for t in detail.get("turns", [])
+            ]
+            source = "turns" if transcript else "none"
+        return _json({"call": call, "transcript": transcript, "transcript_source": source})
 
     async def _metrics(self, _request: web.Request) -> web.Response:
         """Prometheus text format.

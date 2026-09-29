@@ -6,6 +6,23 @@ Dated, newest first. One entry per phase / notable change. Related:
 
 ---
 
+## 2026-09-29 — Supervisor page: call detail and search (IMP-007, web app slice 2)
+Click any recent call to read the **whole conversation** as a chat, caller on
+the left and agent on the right, with how it ended and where it was
+transferred. Narrow the list by date, agent, outcome (transferred or handled)
+or part of the caller's number.
+
+* `GET /history/<call_id>` reads the call's `conversation.json` (the only place
+  the agent's side is kept) in a thread, and only from inside `recordings/`.
+  It falls back to the caller-only turns if the file is gone
+  ([[decisions]] 055).
+* `/history` filters: `since`, `until` (YYYY-MM-DD, inclusive), `persona`,
+  `outcome=transferred|handled`, `caller`. Bad values get a 400 with a reason.
+* Still one HTML file, no framework, loopback-only.
+* The `/improve` smoke run now uses ports 18090/18091 and checks it is talking
+  to a silent engine, after one run reached the live VM through a VS Code port
+  forward on 8091 (read-only, no calls placed).
+
 ## 2026-09-28 — Supervisor page: recent calls (IMP-005, web app slice 1)
 The dashboard now lists the last 50 **finished** calls, not just the ones in
 progress: when, how long, which agent, the caller, how it ended, and whether it

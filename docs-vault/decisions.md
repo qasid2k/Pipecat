@@ -1543,3 +1543,35 @@ the instant a call disappears would miss the call that triggered the fetch.
 **Limits.** `?limit=` is capped at 200 per request. Exposure is unchanged:
 loopback only and no auth, exactly like `/calls`, which already shows caller
 numbers. Login is slice 3 of IMP-004.
+
+---
+
+## 055 — Call detail reads the conversation file, confined to recordings/
+*Date: 2026-09-29 · IMP-007, slice 2 of the IMP-004 supervisor web app*
+
+**Decision.** `GET /history/<call_id>` returns the call row plus its transcript.
+The transcript comes from the call's `conversation.json` (path on the row),
+read in a thread, and **only if the path resolves to a file inside
+`recordings/`**. If that file is missing, it falls back to the caller-only
+`turns` rows, and the response says which (`transcript_source`:
+`conversation` / `turns` / `none`). The path itself is never sent to the
+browser. `/history` gains filters (date range, agent, outcome, caller
+substring), all bound SQL parameters; caller search escapes `%` and `_`.
+
+**Why the file and not the database.** `turns` holds only the CALLER's words:
+the recorder sits between STT and the LLM, so it never sees the agent's reply
+(deferred since Stage B, [[roadmap]] §2). Recording agent turns properly means
+changing the pipeline, which is riskier than this slice should be. The file
+already holds both sides for every call since Phase 2.
+
+**Why confine the path.** It comes from a database row, and a row is not a
+promise: a bad migration, a hand edit or a future bug could put any path there,
+and then this endpoint would read any file on the VM for anyone who reaches the
+page. Resolving it and requiring it to be inside `recordings/` costs one line.
+
+**Why `/history/<id>` and not `/calls/<id>`.** `/calls` means calls in progress
+(from memory); finished calls come from the database under `/history`. Mixing
+them under one name would make "is this live?" ambiguous.
+
+**Later:** when agent turns are recorded in `turns`, the detail view can stop
+reading files, and search can extend to what was said.
