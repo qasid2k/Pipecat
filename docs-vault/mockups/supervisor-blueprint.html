@@ -150,6 +150,10 @@
   .hbar { display: grid; grid-template-columns: 84px minmax(0, 1fr) 30px; gap: 8px; align-items: center; font-size: 12.5px; margin-bottom: 6px; }
   .hbar .track { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
   .hbar .fill { height: 100%; border-radius: 999px; }
+  .actions { display: flex; gap: 6px; }
+  .mini { border: 1px solid var(--border); background: var(--surface); border-radius: 7px; padding: 3px 9px; font-size: 12px; font-weight: 600; color: var(--text); }
+  .mini:hover { border-color: var(--brand); color: var(--brand); }
+  .ag.busy .mini { background: color-mix(in srgb, var(--surface) 70%, transparent); }
   .later-page { display: grid; gap: 10px; }
   .later-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; border: 1px dashed var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
   .later-row span { color: var(--muted); font-size: 12.5px; }
@@ -196,7 +200,7 @@
 <div class="wrap">
   <header class="intro">
     <h1>Supervisor app blueprint</h1>
-    <p>What each page of the voice-agent supervisor app shows, and why. Click the pages in the sidebar. The lettered markers on each page match the notes on the right. Everything uses the app's real colours, so this is how it will look. All numbers, names and calls are example data.</p>
+    <p>What each page of the voice-agent supervisor app shows, and why. Click the pages in the sidebar. The lettered markers on each page match the notes on the right. Everything uses the app's real colours, so this is how it will look. All numbers, names and calls are example data. Version 2 adds the fixes from the design review: stricter "resolved" numbers, callers who couldn't get through, masked numbers, supervisor actions, and a separate System health page.</p>
     <div class="legend">
       Data:
       <span class="chip s-ready">Ready now</span>
@@ -225,14 +229,17 @@
 
   <section class="order" aria-labelledby="order-h">
     <h2 id="order-h">Suggested build order</h2>
-    <p>Each step is one slice: built, tested, and checked live on the VM before the next, as usual. The order puts the biggest gain for supervisors first, and waits to build pages that depend on data we don't capture yet.</p>
+    <p>Each step is one slice: built, tested, and checked live on the VM before the next. Steps 1 and 2 fix what the numbers mean before anything is built on them.</p>
     <div class="steps">
-      <div class="step"><small>Next</small><b>Insights page + "today" numbers on Live</b><span>One summary query over the calls table. Unlocks E, K, L, M, N. Numbers click through to Calls, filtered.</span></div>
-      <div class="step"><small>Then</small><b>Calls page upgrade</b><span>Outcome chips, quick filters, and the caller's first line in the list. The detail view gets the timing strip (needs the per-call greeting time stored).</span></div>
-      <div class="step"><small>Then</small><b>Agent stats</b><span>Per-agent calls today, average length, and the share sent to a human.</span></div>
-      <div class="step"><small>Then</small><b>Activity feed + alerts on Live</b><span>Needs AI-model errors counted (pairs with the parked "apologise and transfer" item, IMP-008).</span></div>
-      <div class="step"><small>Then</small><b>Login, then office-network access</b><span>Already planned (IMP-010). Required before Settings, because Settings can change things.</span></div>
-      <div class="step"><small>Later</small><b>Settings</b><span>Agents, prompts, departments and hours without editing YAML (product theme 3).</span></div>
+      <div class="step"><small>1 · Next</small><b>Honest numbers</b><span>The resolution rule ("Resolved by the AI" and "Unclear"), the business time zone, and masked caller numbers by default. The rules every later page uses.</span></div>
+      <div class="step"><small>2</small><b>Insights page + today's numbers on Live</b><span>One summary query over the calls table. Numbers click through to Calls, filtered.</span></div>
+      <div class="step"><small>3</small><b>Couldn't get through</b><span>Read Asterisk's call records (CDR) so busy turn-aways show up in Live, Calls and Insights.</span></div>
+      <div class="step"><small>4</small><b>Calls upgrade + export</b><span>Outcome chips, quick filters, the caller's first line, and CSV export.</span></div>
+      <div class="step"><small>5</small><b>System health</b><span>Provider response times and errors (pairs with IMP-008), the greeting-wait figures, audio and machines. Engineering numbers move off the supervisor pages.</span></div>
+      <div class="step"><small>6</small><b>Agents: stats + table view</b><span>Per-agent numbers, and the table view for large teams.</span></div>
+      <div class="step"><small>7</small><b>Login, then office-network access</b><span>IMP-010. Unlocks full numbers, Wallboard mode, and everything that acts.</span></div>
+      <div class="step"><small>8</small><b>Listen in and transfer</b><span>Supervisor actions on a live call, using Asterisk's listen and transfer features.</span></div>
+      <div class="step"><small>9</small><b>Settings + notifications</b><span>Config without YAML, alert emails or Slack, the weekly summary, and privacy settings.</span></div>
     </div>
   </section>
 
@@ -245,6 +252,7 @@ const ICON = {
   calls: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
   insights: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16V11"/><path d="M12 16V7"/><path d="M17 16v-3"/></svg>',
   agents: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/></svg>',
+  health: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="M6 10h3l2-3 2 6 2-3h3"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>'
 };
 const chip = (s) => ({ ready: '<span class="chip s-ready">Ready now</span>', query: '<span class="chip s-query">New query</span>', new: '<span class="chip s-new">Needs new data</span>', later: '<span class="chip s-later">Later</span>' })[s];
@@ -279,64 +287,75 @@ function hbars(rows, color) {
 const PAGES = {
   live: {
     label: "Live",
-    purpose: "<b>Job:</b> tell a supervisor in five seconds whether anything needs them right now. Only numbers that call for action; history lives on Insights. Works on a wall screen.",
+    purpose: "<b>Job:</b> tell a supervisor in five seconds whether anything needs them right now, and let them act on it. Only numbers that call for action; trends live on Insights, server metrics on System health. Numbers are masked by default so it is safe on a shared screen.",
     html: `
-      <div class="ph"><div><h2>Live</h2><p>Right now, across every agent</p></div><span class="chip s-ready" style="font-size:12.5px">Audio OK</span></div>
+      <div class="ph"><div><h2>Live</h2><p>Right now · today = Europe/London</p></div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <div class="seg mk" data-mk="Q"><span class="on">Supervisor</span><span>Wallboard</span></div>
+          <span class="chip s-ready" style="font-size:12.5px">All systems OK</span>
+        </div></div>
       <div class="grid" style="gap:14px">
-        <div class="alert mk" data-mk="A" role="status"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;margin-top:1px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><div><b>The AI model failed on 2 calls in the last 15 minutes.</b> Callers heard silence. Gemini returned "high demand".</div><span class="act">See calls</span></div>
+        <div class="alert mk" data-mk="A" role="status"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;margin-top:1px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><div><b>3 callers couldn't get through in the last 15 minutes: all agents were busy.</b> Consider adding an agent.</div><span class="act">See calls</span></div>
         <div class="grid kpis mk" data-mk="B">
           <div class="kpi"><small>Agents on call</small><b class="num">2 / 3</b><div class="timing" style="height:6px;margin-top:6px"><span style="width:67%;background:var(--busy)"></span><span style="width:33%;background:var(--surface-2)"></span></div></div>
-          <div class="kpi"><small>Calls today</small><b class="num">47</b><em>since 00:00</em></div>
-          <div class="kpi"><small>Handled by the AI</small><b class="num">81%</b><em>38 of 47</em></div>
+          <div class="kpi"><small>Calls today</small><b class="num">50</b><em>47 answered · 3 missed</em></div>
+          <div class="kpi"><small>Resolved by the AI</small><b class="num">74%</b><em>35 of 47 · 3 unclear</em></div>
           <div class="kpi"><small>Sent to a human</small><b class="num">7</b><em>billing 4 · support 3</em></div>
-          <div class="kpi warn"><small>Problems</small><b class="num">2</b><em>2 failed · 0 turned away</em></div>
+          <div class="kpi warn"><small>Problems</small><b class="num">5</b><em>3 couldn't get through · 2 failed</em></div>
         </div>
         <div>
-          <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:4px 0 10px">Agents</h3>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:4px 0 10px">
+            <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0">Agents</h3>
+            <div class="seg mk" data-mk="R"><span class="on">Cards</span><span>Table</span></div>
+          </div>
           <div class="grid agents mk" data-mk="C">
-            <div class="ag busy"><div class="top"><b>Sarah</b><span class="pill p-busy">On call</span></div><div class="row"><span class="mono">+44 7700 900123</span><span class="dur num">4:12</span></div><div class="quote">"I was charged twice for September…"</div></div>
-            <div class="ag busy"><div class="top"><b>Daniel</b><span class="pill p-busy">On call</span></div><div class="row"><span class="mono">+44 7700 900456</span><span class="dur num">0:38</span></div><div class="quote">"Hi, is this the support line?"</div></div>
+            <div class="ag busy"><div class="top"><b>Sarah</b><span class="pill p-busy">On call</span></div><div class="row"><span class="mono">+44 ••• 0123</span><span class="dur num">4:12</span></div><div class="quote">"I was charged twice for September…"</div><div class="actions"><button class="mini" type="button">Listen in</button><button class="mini" type="button">Transfer</button></div></div>
+            <div class="ag busy"><div class="top"><b>Daniel</b><span class="pill p-busy">On call</span></div><div class="row"><span class="mono">+44 ••• 0456</span><span class="dur num">0:38</span></div><div class="quote">"Hi, is this the support line?"</div><div class="actions"><button class="mini" type="button">Listen in</button><button class="mini" type="button">Transfer</button></div></div>
             <div class="ag"><div class="top"><b>Alex</b><span class="pill p-free">Free</span></div><div class="row" style="color:var(--muted)"><span>Free for 2:05</span><span>11 calls today</span></div></div>
           </div>
         </div>
         <div class="grid two">
           <div class="card mk" data-mk="D"><h3>Calls in progress</h3><div class="tbl-wrap"><table>
-            <thead><tr><th>Duration</th><th>Agent</th><th>Caller</th><th>Wait before greeting</th></tr></thead>
-            <tbody><tr><td class="mono num">4:12</td><td>Sarah</td><td class="mono">+44 7700 900123</td><td class="num">1.7 s</td></tr>
-            <tr><td class="mono num">0:38</td><td>Daniel</td><td class="mono">+44 7700 900456</td><td class="num">1.9 s</td></tr></tbody></table></div></div>
+            <thead><tr><th>Duration</th><th>Agent</th><th>Caller</th><th>Topic so far</th></tr></thead>
+            <tbody><tr><td class="mono num">4:12</td><td>Sarah</td><td class="mono">+44 ••• 0123</td><td class="said">Double charge</td></tr>
+            <tr><td class="mono num">0:38</td><td>Daniel</td><td class="mono">+44 ••• 0456</td><td class="said">Support question</td></tr></tbody></table></div></div>
           <div class="card mk" data-mk="E"><h3>Just now</h3><ul class="feed">
             <li><time>10:42</time><span><b>Sarah</b> sent a caller to <b>billing</b></span></li>
             <li><time>10:40</time><span style="color:var(--bad)">Call failed: AI model error</span></li>
-            <li><time>10:37</time><span><b>Alex</b> finished a call · 3:48 · handled</span></li>
+            <li><time>10:38</time><span style="color:var(--bad)">3 callers couldn't get through (all busy)</span></li>
+            <li><time>10:37</time><span><b>Alex</b> resolved a call · 3:48</span></li>
             <li><time>10:31</time><span>Caller went quiet · ended after 2 check-ins</span></li>
           </ul></div>
         </div>
       </div>`,
     notes: [
-      ["A", "Alert strip", "Appears only when something is wrong, and says what callers experienced plus a link to the affected calls. Silent the rest of the time, so it gets noticed when it shows.", "new", "Needs AI-model errors counted per call (today they are only in the log). Pairs with IMP-008."],
-      ["B", "Today's headline numbers", "Five numbers, no more. \"Handled by the AI\" is the single most important number for an AI call centre: calls resolved without a person. Problems turns red only when non-zero.", "query", "Agents on call is ready now. The \"today\" figures need one summary query over the calls table (today's page counts since restart)."],
-      ["C", "Agent cards", "One card per agent: free or on a call, who with, for how long, and the last thing the caller said, so a supervisor can see a call going wrong without listening in.", "query", "Status and duration are ready now. The caller's latest line needs the live turns (already written to the database during the call) sent with the live update."],
-      ["D", "Calls in progress", "The same calls as a compact list, plus how long each caller waited before hearing the agent (IMP-002's measurement).", "ready", "The wait-before-greeting column needs that figure kept per call instead of only in the log."],
-      ["E", "Just now", "A short feed of what happened in the last minutes: transfers, failures, check-ins that ended a call. Answers \"what just happened?\" without leaving the page.", "new", "Built from call records as they are written; the failure entries need the same AI-error capture as A."]
+      ["A", "Alert strip", "Appears only when something is wrong, says what callers experienced, and links to the calls. The same alerts can go out by email or Slack, so they reach someone even when nobody is watching the screen.", "new", "Needs \"couldn't get through\" (from Asterisk, see B) and AI-model errors counted per call. Notifications come with Settings."],
+      ["B", "Today's headline numbers", "\"Resolved by the AI\" is stricter than \"not transferred\": a call counts only if it lasted more than a few seconds, the caller didn't hang up while the agent was speaking, and the same number didn't call back within 24 hours. Calls that fail those checks show as \"unclear\" instead of inflating the rate. \"Couldn't get through\" counts callers the Asterisk busy message turned away, who never reach the bot. \"Today\" uses the business time zone, not the server's UTC clock.", "query", "Resolution and the time zone are rules over data we already store. \"Couldn't get through\" needs Asterisk's call records (CDR) read in, since the bot never sees those callers (decision 041)."],
+      ["Q", "Supervisor / Wallboard", "Two modes. Supervisor: full detail for a logged-in supervisor. Wallboard: for a screen anyone can see, with numbers masked and callers' words hidden.", "later", "Masking (+44 ••• 0123) can ship now as the default. Full numbers come back once login exists (IMP-010)."],
+      ["C", "Agent cards", "Status, masked caller, duration, and the caller's latest words, so a supervisor can see a call going wrong. \"Listen in\" and \"Transfer\" let them act on it.", "query", "Status and duration are ready now. The latest line needs the live turns (already stored during the call) in the live update. Listen in and Transfer use Asterisk's listen and transfer features, and need login first."],
+      ["R", "Cards or table", "Cards suit a small team. At 20+ agents, a table sorted by what needs attention (longest call and problems first) replaces them, and the choice is remembered.", "later", "Same data as the cards; only presentation."],
+      ["D", "Calls in progress", "A compact list with a short topic so far. The per-call wait-before-greeting number moved to System health, because it is for whoever runs the servers.", "later", "The topic needs a short AI summary of the call so far (costs a little per call). Without it the column shows the caller's first line."],
+      ["E", "Just now", "What happened in the last few minutes: transfers, failures, busy turn-aways, check-ins that ended a call.", "new", "Built from call records as they are written, plus the same new data as A."]
     ]
   },
   calls: {
     label: "Calls",
     purpose: "<b>Job:</b> find any finished call fast and understand exactly what happened on it. Every number on Live and Insights opens this page already filtered.",
     html: `
-      <div class="ph"><div><h2>Calls</h2><p>Finished calls, newest first</p></div></div>
+      <div class="ph"><div><h2>Calls</h2><p>Finished calls, newest first</p></div><button class="mini mk" data-mk="S" type="button" style="padding:6px 12px">Export CSV</button></div>
       <div class="grid two" style="grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)">
         <div class="card mk" data-mk="F">
           <div class="search"><div>Search caller number or what was said…</div></div>
-          <div class="chips"><span class="fchip on">Today</span><span class="fchip">Sent to a human</span><span class="fchip">Problems</span><span class="fchip">Longer than 5 min</span><span class="fchip">Agent ▾</span><span class="fchip">Dates ▾</span></div>
+          <div class="chips"><span class="fchip on">Today</span><span class="fchip">Sent to a human</span><span class="fchip">Unclear</span><span class="fchip">Problems</span><span class="fchip">Longer than 5 min</span><span class="fchip">Agent ▾</span><span class="fchip">Dates ▾</span></div>
           <div class="tbl-wrap"><table>
             <thead><tr><th>Time</th><th>Agent</th><th>Outcome</th><th>Length</th><th>Caller said first</th></tr></thead>
             <tbody>
               <tr class="sel"><td class="num">10:42</td><td>Sarah</td><td><span class="oc oc-hu">To billing</span></td><td class="mono num">4:51</td><td class="said">"I was charged twice for September"</td></tr>
               <tr><td class="num">10:40</td><td>Daniel</td><td><span class="oc oc-bad">Failed</span></td><td class="mono num">0:31</td><td class="said">"Can you transfer me to billing?"</td></tr>
-              <tr><td class="num">10:37</td><td>Alex</td><td><span class="oc oc-ai">Handled by AI</span></td><td class="mono num">3:48</td><td class="said">"What are your opening hours?"</td></tr>
+              <tr><td class="num">10:38</td><td>—</td><td><span class="oc oc-bad">Couldn't get through</span></td><td class="mono num">0:09</td><td class="said">Heard the busy message</td></tr>
+              <tr><td class="num">10:37</td><td>Alex</td><td><span class="oc oc-ai">Resolved by AI</span></td><td class="mono num">3:48</td><td class="said">"What are your opening hours?"</td></tr>
+              <tr><td class="num">10:33</td><td>Sarah</td><td><span class="oc oc-q">Unclear · hung up mid-answer</span></td><td class="mono num">0:21</td><td class="said">"Is my order shipped?"</td></tr>
               <tr><td class="num">10:31</td><td>Sarah</td><td><span class="oc oc-q">Caller went quiet</span></td><td class="mono num">0:44</td><td class="said">No speech</td></tr>
-              <tr><td class="num">10:22</td><td>Alex</td><td><span class="oc oc-ai">Handled by AI</span></td><td class="mono num">2:10</td><td class="said">"Do you do weekend support?"</td></tr>
             </tbody></table></div>
         </div>
         <div class="card mk" data-mk="G">
@@ -356,36 +375,39 @@ const PAGES = {
         </div>
       </div>`,
     notes: [
-      ["F", "Search and quick filters", "One search box plus one-click chips for the questions supervisors actually ask: today, sent to a human, problems, long calls. The list shows an outcome chip and the caller's first line, so you can scan without opening calls.", "query", "Filters exist today (IMP-007). Outcome chips need the end reasons grouped into a few plain outcomes. The first line comes from the turns table. Searching what was said needs a text index (later)."],
-      ["G", "Call summary", "The facts at the top in plain words, including why it was sent to a human (the reason the AI gave).", "query", "Everything but \"Why\" is ready now. \"Why\" needs the transfer reason saved when the AI calls the transfer tool."],
-      ["H", "Wait-before-greeting strip", "The IMP-002 breakdown drawn as one bar, so a slow greeting shows its cause at a glance.", "new", "Needs the per-call setup timing stored (today it is only in the log). A small database change."],
-      ["I", "The conversation", "The chat you have now, plus system events (transferred, check-in, error) inline where they happened.", "query", "The chat is ready now. Inline events need the call's events stored with timestamps."]
+      ["F", "Search and quick filters", "One search box plus one-click chips for the questions supervisors actually ask. Every row carries a plain outcome: Resolved by AI, To a department, Unclear (with the reason), Couldn't get through, Failed, Caller went quiet.", "query", "Filters exist (IMP-007). Outcomes need the resolution rule from Live B. \"Couldn't get through\" rows need the CDR import. Searching what was said needs a text index (later)."],
+      ["S", "Export", "Download the filtered list as CSV for a report or a spreadsheet. Respects the current filters, and masks numbers unless the user is a logged-in supervisor.", "query", "A CSV version of the same query."],
+      ["G", "Call summary", "The facts in plain words, including why it was sent to a human (the reason the AI gave). Full caller number here, because this page is for logged-in supervisors.", "query", "\"Why\" needs the transfer reason saved when the AI calls the transfer tool."],
+      ["H", "Wait-before-greeting strip", "Kept on the single-call view, where it helps explain one slow call. Averages across calls live on System health.", "new", "Needs the per-call setup timing stored (a small database change)."],
+      ["I", "The conversation", "The chat, plus system events (transferred, check-in, error) inline where they happened.", "query", "Inline events need the call's events stored with timestamps."]
     ]
   },
   insights: {
     label: "Insights",
     purpose: "<b>Job:</b> answer \"how are we doing, and is it getting better?\" over a day, a week or a month. Trends and reasons, not live status. Every bar and number opens Calls, filtered.",
     html: `
-      <div class="ph"><div><h2>Insights</h2><p>Trends over time</p></div><div class="seg"><span>Today</span><span class="on">7 days</span><span>30 days</span></div></div>
+      <div class="ph"><div><h2>Insights</h2><p>Trends over time · Europe/London</p></div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><div class="seg"><span>Today</span><span class="on">7 days</span><span>30 days</span></div><button class="mini mk" data-mk="T" type="button" style="padding:5px 12px">Weekly email</button></div></div>
       <div class="grid" style="gap:14px">
         <div class="grid kpis mk" data-mk="J">
-          <div class="kpi"><small>Calls</small><b class="num">312</b><em><span class="up">▲ 12%</span> vs previous</em></div>
-          <div class="kpi"><small>Handled by the AI</small><b class="num">79%</b><em><span class="up">▲ 3 pts</span></em></div>
+          <div class="kpi"><small>Calls</small><b class="num">324</b><em><span class="up">▲ 12%</span> vs previous</em></div>
+          <div class="kpi"><small>Resolved by the AI</small><b class="num">72%</b><em><span class="up">▲ 3 pts</span> · 6% unclear</em></div>
           <div class="kpi"><small>Sent to a human</small><b class="num">17%</b><em><span class="up">▼ 2 pts</span></em></div>
+          <div class="kpi"><small>Couldn't get through</small><b class="num">4%</b><em><span class="down">▲ 1 pt</span> · busy hours</em></div>
           <div class="kpi"><small>Average call</small><b class="num">2:41</b><em>median 2:05</em></div>
-          <div class="kpi"><small>Wait before greeting</small><b class="num">1.8 s</b><em>90% under 2.4 s</em></div>
         </div>
         <div class="card mk" data-mk="K"><h3>Calls per hour · today</h3>${hourChart()}</div>
         <div class="grid two" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
           <div class="card mk" data-mk="L"><h3>Why calls went to a human</h3>${hbars([["Billing", 24], ["Support", 17], ["Sales", 6], ["Operator", 6]], "var(--brand)")}</div>
-          <div class="card mk" data-mk="M"><h3>How calls ended</h3>${hbars([["Handled", 246], ["Transferred", 53], ["Went quiet", 8], ["Failed", 5]], "var(--ok)")}</div>
+          <div class="card mk" data-mk="M"><h3>How calls ended</h3>${hbars([["Resolved", 233], ["Transferred", 53], ["Unclear", 19], ["Busy", 12], ["Went quiet", 8], ["Failed", 5]], "var(--ok)")}</div>
         </div>
       </div>`,
     notes: [
-      ["J", "Headline trends", "The same kind of numbers as Live, but over a period and compared with the one before, with the arrow coloured by whether the change is good (fewer transfers is green).", "query", "One summary query over the calls table, by date range. Wait-before-greeting needs the per-call timing stored (see H)."],
-      ["K", "Calls per hour", "When calls come in and how many the AI handled, stacked. This is what sizes the agent roster: busy hours show where capacity runs out.", "query", "Grouping the calls table by hour."],
-      ["L", "Why calls went to a human", "Which departments take the handovers. A department that grows here is the next thing to teach the AI (see the parked knowledge-base plan).", "ready", "transferred_to is already stored on every call."],
-      ["M", "How calls ended", "Handled, transferred, caller went quiet, failed. Failed should stay near zero; a jump means something broke.", "query", "End causes exist; they need grouping into these few plain outcomes (the same grouping as F)."]
+      ["J", "Headline trends", "Compared with the previous period. Arrows are coloured by whether the change is good, not by direction: fewer transfers is green, more \"couldn't get through\" is red.", "query", "One summary query over the calls table by date range, using the business time zone and the resolution rule. \"Couldn't get through\" needs the CDR import."],
+      ["K", "Calls per hour", "When calls come in and how many the AI resolved, stacked. Shows where capacity runs out.", "query", "Grouping the calls table by hour in the business time zone."],
+      ["L", "Why calls went to a human", "Which departments take the handovers. A growing one is the next thing to teach the AI (the parked knowledge-base plan).", "ready", "transferred_to is already stored on every call."],
+      ["M", "How calls ended", "Every call lands in one plain outcome. \"Unclear\" is where the AI may be losing callers quietly: worth reading a few each week.", "query", "The same outcome grouping as Calls F."],
+      ["T", "Weekly email", "A short summary to a manager each Monday: these numbers and the week's change. For people who never open the app.", "later", "Needs email settings; comes with Settings."]
     ]
   },
   agents: {
@@ -394,18 +416,49 @@ const PAGES = {
     html: `
       <div class="ph"><div><h2>Agents</h2><p>3 agents in the roster</p></div><div class="seg"><span class="on">Today</span><span>7 days</span></div></div>
       <div class="card mk" data-mk="N"><div class="tbl-wrap"><table>
-        <thead><tr><th>Agent</th><th>Now</th><th>Voice</th><th>Calls</th><th>Average</th><th>Handled by AI</th><th>Sent to a human</th></tr></thead>
+        <thead><tr><th>Agent</th><th>Now</th><th>Voice</th><th>Calls</th><th>Average</th><th>Resolved by AI</th><th>Unclear</th><th>Sent to a human</th></tr></thead>
         <tbody>
-          <tr><td><b>Alex</b></td><td><span class="pill p-free">Free</span></td><td class="mono">helena</td><td class="num">17</td><td class="num">2:31</td><td class="num">88%</td><td class="num">2</td></tr>
-          <tr><td><b>Daniel</b></td><td><span class="pill p-busy">On call</span></td><td class="mono">orion</td><td class="num">14</td><td class="num">2:58</td><td class="num">79%</td><td class="num">3</td></tr>
-          <tr><td><b>Sarah</b></td><td><span class="pill p-busy">On call</span></td><td class="mono">thalia</td><td class="num">16</td><td class="num">3:05</td><td class="num">75%</td><td class="num">4</td></tr>
+          <tr><td><b>Alex</b></td><td><span class="pill p-free">Free</span></td><td class="mono">helena</td><td class="num">17</td><td class="num">2:31</td><td class="num">82%</td><td class="num">1</td><td class="num">2</td></tr>
+          <tr><td><b>Daniel</b></td><td><span class="pill p-busy">On call</span></td><td class="mono">orion</td><td class="num">14</td><td class="num">2:58</td><td class="num">71%</td><td class="num">1</td><td class="num">3</td></tr>
+          <tr><td><b>Sarah</b></td><td><span class="pill p-busy">On call</span></td><td class="mono">thalia</td><td class="num">16</td><td class="num">3:05</td><td class="num">69%</td><td class="num">1</td><td class="num">4</td></tr>
         </tbody></table></div></div>
       <div class="card mk" data-mk="O" style="margin-top:14px"><h3>Sarah · recent calls and instructions</h3>
         <p style="margin:0 0 8px;color:var(--muted);font-size:13px">Opening line: "Hi, this is Sarah at Techbridge. How can I help you today?"</p>
         <p style="margin:0;color:var(--muted);font-size:13px">Instructions: prompts/sarah.txt (read-only here; editable in Settings later)</p></div>`,
     notes: [
-      ["N", "Roster with performance", "One row per agent: status now, voice, calls, average length, and how often each hands callers to a person. A clearly worse row is a prompt to look at that agent's calls or instructions.", "query", "Status is ready now. The numbers are the same summary query as Insights, grouped by agent. The voice needs the roster exposed by the API."],
-      ["O", "Agent detail", "Click an agent: their opening line, instructions, and recent calls. Read-only until Settings exists.", "later", "Read-only view is a small API addition; editing waits for login and Settings."]
+      ["N", "Roster with performance", "One row per agent, sortable. A clearly worse row is a prompt to read that agent's unclear calls or look at its instructions. Scales to large rosters because it is already a table.", "query", "The same summary query as Insights, grouped by agent. The voice needs the roster exposed by the API."],
+      ["O", "Agent detail", "Opening line, instructions, and recent calls. Read-only until Settings exists.", "later", "Read-only view is a small API addition; editing waits for login and Settings."]
+    ]
+  },
+  health: {
+    label: "System health",
+    purpose: "<b>Job:</b> for whoever runs the servers, not supervisors. Is the platform healthy, and if calls are slow or failing, which part is to blame? Kept apart so the supervisor pages stay about callers.",
+    html: `
+      <div class="ph"><div><h2>System health</h2><p>For admins and developers · last hour</p></div><span class="chip s-ready" style="font-size:12.5px">All systems OK</span></div>
+      <div class="grid" style="gap:14px">
+        <div class="card mk" data-mk="U"><h3>AI providers</h3><div class="tbl-wrap"><table>
+          <thead><tr><th>Service</th><th>Status</th><th>Typical response</th><th>Slowest 10%</th><th>Errors</th></tr></thead>
+          <tbody>
+            <tr><td>Speech to text · Deepgram</td><td><span class="pill p-free">OK</span></td><td class="num">180 ms</td><td class="num">310 ms</td><td class="num">0</td></tr>
+            <tr><td>Language model · Gemini</td><td><span class="pill p-busy">Slow</span></td><td class="num">1.4 s</td><td class="num">6.2 s</td><td class="num" style="color:var(--bad);font-weight:600">2</td></tr>
+            <tr><td>Text to speech · Deepgram</td><td><span class="pill p-free">OK</span></td><td class="num">240 ms</td><td class="num">420 ms</td><td class="num">0</td></tr>
+          </tbody></table></div></div>
+        <div class="grid two" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+          <div class="card mk" data-mk="V"><h3>Wait before greeting</h3>
+            <div style="display:flex;gap:18px;flex-wrap:wrap"><div><div class="kpi" style="border:0;padding:0"><small>Typical</small><b class="num">1.8 s</b></div></div><div><div class="kpi" style="border:0;padding:0"><small>Slowest 10%</small><b class="num">2.4 s</b></div></div></div>
+            <div class="timing" style="margin-top:10px"><span style="width:12%;background:var(--muted)"></span><span style="width:17%;background:var(--busy)"></span><span style="width:55%;background:var(--brand)"></span><span style="width:16%;background:var(--ok)"></span></div>
+            <div class="tlegend"><span><i style="background:var(--muted)"></i>Setup</span><span><i style="background:var(--busy)"></i>Voice detector</span><span><i style="background:var(--brand)"></i>Connecting to AI</span><span><i style="background:var(--ok)"></i>Greeting</span></div></div>
+          <div class="card mk" data-mk="W"><h3>Audio</h3><div class="hbar"><span>Dropped</span><div class="track"><div class="fill" style="width:0%"></div></div><span class="num" style="text-align:right">0</span></div><div class="hbar"><span>Late audio</span><div class="track"><div class="fill" style="width:8%;background:var(--busy)"></div></div><span class="num" style="text-align:right">1</span></div><p style="margin:6px 0 0;font-size:12.5px;color:var(--muted)">Frames lost or sent late. Non-zero under load means the machine is at its limit.</p></div>
+        </div>
+        <div class="card mk" data-mk="X"><h3>Machines</h3><div class="tbl-wrap"><table>
+          <thead><tr><th>Machine</th><th>Calls</th><th>CPU</th><th>Memory</th><th>Version</th><th>Up</th></tr></thead>
+          <tbody><tr><td class="mono">vm-qasid</td><td class="num">2 / 3</td><td class="num">18%</td><td class="num">412 MB</td><td class="mono">138d03b</td><td class="num">3:42:10</td></tr></tbody></table></div></div>
+      </div>`,
+    notes: [
+      ["U", "AI providers", "Each outside service with its typical and slowest response time and its errors. When calls go silent, this says in one look whether it is Gemini (like the 503 on 2026-09-28) or us.", "new", "Needs response times and errors measured per provider inside the engine. Pairs with IMP-008."],
+      ["V", "Wait before greeting", "The IMP-002 measurement across all calls: the typical wait, the slow tail, and which step it goes to.", "query", "The average is on /metrics already; typical and slowest 10% need the per-call timing stored."],
+      ["W", "Audio", "Dropped and late audio frames, the load-test signals, surfaced for everyday use.", "ready", "Already counted and on /metrics."],
+      ["X", "Machines", "One row per bot machine: calls, CPU, memory, running version. One row today; at the 500-call target it will be 10+, and every page aggregates across them.", "query", "CPU and memory are on /metrics (Linux). The version needs the git commit exposed. Several machines need a shared data source (Stage F)."]
     ]
   },
   settings: {
@@ -418,17 +471,19 @@ const PAGES = {
         <div class="later-row"><b>Agents &amp; voices</b><span>Add or remove agents, pick a voice, and listen to a sample</span></div>
         <div class="later-row"><b>Instructions</b><span>Edit each agent's prompt, with a test call before saving</span></div>
         <div class="later-row"><b>Departments</b><span>Where "billing", "support", "sales" and "operator" transfer to</span></div>
-        <div class="later-row"><b>Business hours</b><span>What callers hear outside opening hours</span></div>
+        <div class="later-row"><b>Business hours &amp; time zone</b><span>What callers hear outside opening hours, and which clock "today" uses</span></div>
+        <div class="later-row"><b>Alerts &amp; notifications</b><span>Which problems alert, and where: email or Slack</span></div>
+        <div class="later-row"><b>Privacy</b><span>Number masking, who sees transcripts, and how long calls are kept</span></div>
         <div class="later-row"><b>Silence check-in</b><span>The "Are you still there?" timing and wording (IMP-001)</span></div>
-        <div class="later-row"><b>People &amp; login</b><span>Supervisor accounts (after IMP-010)</span></div>
+        <div class="later-row"><b>People &amp; login</b><span>Supervisor and admin accounts (after IMP-010)</span></div>
       </div>`,
     notes: [
-      ["P", "Everything in config.yaml, safely editable", "Each setting keeps the same validation the config loader already has, so the web app can't save a setting that the bot would refuse at start-up.", "later", "Needs login first, then a safe way to apply changes without dropping live calls."]
+      ["P", "Everything in config.yaml, safely editable", "Each setting keeps the validation the config loader already has, so the web app can't save something the bot would refuse at start-up. Privacy settings answer the roadmap's open gap: retention, access and masking.", "later", "Needs login first, then a way to apply changes without dropping live calls."]
     ]
   }
 };
 
-const ORDER = ["live", "calls", "insights", "agents", "settings"];
+const ORDER = ["live", "calls", "insights", "agents", "health", "settings"];
 let current = "live";
 
 function render() {
